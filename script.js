@@ -10,9 +10,13 @@ function getPersianDateParts(date) {
         else if (p.type === 'month') month = p.value;
         else if (p.type === 'day') day = p.value;
     }
-    const map = { '۰':'0','۱':'1','۲':'2','۳':'3','۴':'4','۵':'5','۶':'6','۷':'7','۸':'8','۹':'9' };
+    const map = { '۰':'0','۱':'1','۲':'2','۳':'3','۴':'4','۵':'5','۶':'6','۷':'7','۸':'8','۹':'9','٠':'0','١':'1','٢':'2','٣':'3','٤':'4','٥':'5','٦':'6','٧':'7','٨':'8','٩':'9' };
     const conv = s => s.split('').map(c => map[c] || c).join('');
-    return { year: parseInt(conv(year)), month: parseInt(conv(month)), day: parseInt(conv(day)) };
+    const y = parseInt(conv(year));
+    const m = parseInt(conv(month));
+    const dd = parseInt(conv(day));
+    if (isNaN(y) || isNaN(m) || isNaN(dd)) return null;
+    return { year: y, month: m, day: dd };
 }
 
 function toPersianDateWithEnglishNumbers(date, withTime = true) {
@@ -32,7 +36,7 @@ function toPersianDateWithEnglishNumbers(date, withTime = true) {
         else if (p.type === 'hour') h = p.value;
         else if (p.type === 'minute') mi = p.value;
     }
-    const map = { '۰':'0','۱':'1','۲':'2','۳':'3','۴':'4','۵':'5','۶':'6','۷':'7','۸':'8','۹':'9' };
+    const map = { '۰':'0','۱':'1','۲':'2','۳':'3','۴':'4','۵':'5','۶':'6','۷':'7','۸':'8','۹':'9','٠':'0','١':'1','٢':'2','٣':'3','٤':'4','٥':'5','٦':'6','٧':'7','٨':'8','٩':'9' };
     const conv = s => s.split('').map(c => map[c] || c).join('');
     y = conv(y); m = conv(m); dy = conv(dy);
     return withTime ? `${y}/${m}/${dy} ${conv(h)}:${conv(mi)}` : `${y}/${m}/${dy}`;
@@ -42,12 +46,23 @@ function formatPersianDate(date, withTime = true) {
     return toPersianDateWithEnglishNumbers(date, withTime);
 }
 
+// ✅ تبدیل امن رشته به عدد: ارقام فارسی، کاما، فاصله
+function toNumber(str) {
+    if (typeof str === 'number') return str;
+    if (!str) return 0;
+    const map = { '۰':'0','۱':'1','۲':'2','۳':'3','۴':'4','۵':'5','۶':'6','۷':'7','۸':'8','۹':'9','٠':'0','١':'1','٢':'2','٣':'3','٤':'4','٥':'5','٦':'6','٧':'7','٨':'8','٩':'9' };
+    const normalized = String(str).split('').map(c => map[c] || c).join('').replace(/,/g, '').replace(/\s/g, '');
+    const n = parseFloat(normalized);
+    return isNaN(n) ? 0 : n;
+}
+
 function generateUID() {
     return 'trade_' + Date.now() + '_' + Math.random().toString(36).slice(2, 11);
 }
 
+// ✅ ID یکتا با فضای نمونه‌ی بزرگ (کاهش تصادم در import)
 function generateTradeId() {
-    return Date.now() * 1000 + Math.floor(Math.random() * 1000);
+    return Date.now() * 1000000 + Math.floor(Math.random() * 1000000);
 }
 
 function getMimeType(name) {
@@ -109,19 +124,22 @@ class TradingJournalDB {
         });
     }
 
+    // ✅ resolve بعد از tx.oncomplete (نه req.onsuccess)
     saveTrade(trade) {
         this.checkReady();
         return new Promise((resolve, reject) => {
+            let tx;
             try {
-                const tx = this.db.transaction(['trades'], 'readwrite');
-                const req = tx.objectStore('trades').put(trade);
-                req.onsuccess = () => resolve(trade.id);
-                req.onerror = (e) => {
-                    const err = e.target.error;
-                    if (err.name === 'QuotaExceededError') reject(new Error('⚠️ فضای ذخیره‌سازی کافی نیست. لطفاً بکاپ بگیرید و داده‌های قدیمی را حذف کنید.'));
-                    else reject(err);
-                };
-            } catch (e) { reject(e); }
+                tx = this.db.transaction(['trades'], 'readwrite');
+                tx.objectStore('trades').put(trade);
+            } catch (e) { return reject(e); }
+            tx.oncomplete = () => resolve(trade.id);
+            tx.onerror = () => {
+                const err = tx.error;
+                if (err && err.name === 'QuotaExceededError') reject(new Error('⚠️ فضای ذخیره‌سازی کافی نیست. لطفاً بکاپ بگیرید و داده‌های قدیمی را حذف کنید.'));
+                else reject(err || new Error('خطا در ذخیره معامله'));
+            };
+            tx.onabort = () => reject(tx.error || new Error('تراکنش لغو شد'));
         });
     }
 
@@ -177,19 +195,26 @@ class TradingJournalDB {
     deleteTrade(tradeId) {
         this.checkReady();
         return new Promise((resolve, reject) => {
-            const tx = this.db.transaction(['trades'], 'readwrite');
-            const req = tx.objectStore('trades').delete(parseInt(tradeId));
-            req.onsuccess = () => resolve();
-            req.onerror = () => reject(req.error);
+            let tx;
+            try {
+                tx = this.db.transaction(['trades'], 'readwrite');
+                tx.objectStore('trades').delete(parseInt(tradeId));
+            } catch (e) { return reject(e); }
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+            tx.onabort = () => reject(tx.error || new Error('aborted'));
         });
     }
 
     deleteTrades(tradeIds) {
         this.checkReady();
         return new Promise((resolve, reject) => {
-            const tx = this.db.transaction(['trades'], 'readwrite');
-            const store = tx.objectStore('trades');
-            for (const id of tradeIds) store.delete(parseInt(id));
+            let tx;
+            try {
+                tx = this.db.transaction(['trades'], 'readwrite');
+                const store = tx.objectStore('trades');
+                for (const id of tradeIds) store.delete(parseInt(id));
+            } catch (e) { return reject(e); }
             tx.oncomplete = () => resolve();
             tx.onerror = () => reject(tx.error);
             tx.onabort = () => reject(tx.error || new Error('aborted'));
@@ -199,9 +224,12 @@ class TradingJournalDB {
     saveAccounts(arr) {
         this.checkReady();
         return new Promise((resolve, reject) => {
-            const tx = this.db.transaction(['accounts'], 'readwrite');
-            const store = tx.objectStore('accounts');
-            for (const a of arr) store.put(a);
+            let tx;
+            try {
+                tx = this.db.transaction(['accounts'], 'readwrite');
+                const store = tx.objectStore('accounts');
+                for (const a of arr) store.put(a);
+            } catch (e) { return reject(e); }
             tx.oncomplete = () => resolve();
             tx.onerror = () => reject(tx.error);
             tx.onabort = () => reject(tx.error || new Error('aborted'));
@@ -218,23 +246,33 @@ class TradingJournalDB {
         });
     }
 
+    // ✅ deleteAccount که واقعاً پاک می‌کند
     deleteAccount(accountId) {
         this.checkReady();
         return new Promise((resolve, reject) => {
-            const tx = this.db.transaction(['accounts'], 'readwrite');
-            const req = tx.objectStore('accounts').delete(parseInt(accountId));
-            req.onsuccess = () => resolve();
-            req.onerror = () => reject(req.error);
+            let tx;
+            try {
+                tx = this.db.transaction(['accounts'], 'readwrite');
+                tx.objectStore('accounts').delete(parseInt(accountId));
+            } catch (e) { return reject(e); }
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+            tx.onabort = () => reject(tx.error || new Error('aborted'));
         });
     }
 
+    // ✅ saveSetting بعد از tx.oncomplete
     saveSetting(key, value) {
         this.checkReady();
         return new Promise((resolve, reject) => {
-            const tx = this.db.transaction(['settings'], 'readwrite');
-            const req = tx.objectStore('settings').put({ key, value });
-            req.onsuccess = () => resolve();
-            req.onerror = () => reject(req.error);
+            let tx;
+            try {
+                tx = this.db.transaction(['settings'], 'readwrite');
+                tx.objectStore('settings').put({ key, value });
+            } catch (e) { return reject(e); }
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+            tx.onabort = () => reject(tx.error || new Error('aborted'));
         });
     }
 
@@ -248,23 +286,36 @@ class TradingJournalDB {
         });
     }
 
+    getAllSettings() {
+        this.checkReady();
+        return new Promise((resolve, reject) => {
+            const tx = this.db.transaction(['settings'], 'readonly');
+            const req = tx.objectStore('settings').getAll();
+            req.onsuccess = () => resolve(req.result || []);
+            req.onerror = () => reject(req.error);
+        });
+    }
+
     checkReady() {
         if (!this.isReady || !this.db) throw new Error('دیتابیس آماده نیست');
     }
 
+    // ✅ backup شامل settings
     async backup() {
         const accounts = await this.getAccounts();
         const trades = await this.getAllTrades();
-        return { accounts, trades, exportDate: new Date().toISOString(), version: '4.0' };
+        const settings = await this.getAllSettings();
+        return { accounts, trades, settings, exportDate: new Date().toISOString(), version: '4.1' };
     }
 
     clearAll() {
         this.checkReady();
         const clear = (name) => new Promise((resolve, reject) => {
             const tx = this.db.transaction([name], 'readwrite');
-            const req = tx.objectStore(name).clear();
-            req.onsuccess = () => resolve();
-            req.onerror = () => reject(req.error);
+            tx.objectStore(name).clear();
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+            tx.onabort = () => reject(tx.error || new Error('aborted'));
         });
         return Promise.all([clear('trades'), clear('accounts'), clear('settings')]);
     }
@@ -362,6 +413,7 @@ function updateGrowthChart() {
     });
 }
 
+// ✅ نمودار ماهانه از بالانس اول ماه شروع می‌شود
 function updateMonthlyGrowthChart() {
     const canvas = document.getElementById('monthlyGrowthChart');
     if (!canvas) return;
@@ -372,11 +424,22 @@ function updateMonthlyGrowthChart() {
         return pd && pd.year === currentYear && pd.month === currentMonth;
     });
     const closed = [...monthly].filter(t => t.status === 'closed').sort((a, b) => new Date(a.date) - new Date(b.date));
-    let bal = initialAccountBalance;
+
+    // بالانس اول ماه = initialAccountBalance + ΣPnL(معاملات قبل از این ماه)
+    const monthStartBalance = initialAccountBalance + trades
+        .filter(t => t.accountId === activeAccountId && t.status === 'closed')
+        .filter(t => {
+            const pd = getPersianDateParts(t.date);
+            if (!pd) return false;
+            return (pd.year < currentYear) || (pd.year === currentYear && pd.month < currentMonth);
+        })
+        .reduce((s, t) => s + calculateTradePnL(t), 0);
+
+    let bal = monthStartBalance;
     const history = [bal];
     const labels = [0];
     closed.forEach((t, i) => { bal += calculateTradePnL(t); history.push(bal); labels.push(i + 1); });
-    if (closed.length === 0) { history.push(initialAccountBalance); labels.push(1); }
+    if (closed.length === 0) { history.push(monthStartBalance); labels.push(1); }
     if (monthlyGrowthChart) monthlyGrowthChart.destroy();
     monthlyGrowthChart = new Chart(ctx, {
         type: 'line',
@@ -403,9 +466,9 @@ function loadOpenTrades() {
                 <span class="open-trade-symbol">${escapeHTML(t.symbol)}</span>
                 <div class="open-trade-detail"><i class="fas ${icon}" style="color:${color}"></i><span>${typeText}</span></div>
                 <div class="open-trade-detail"><i class="fas fa-calendar"></i><span>${formatPersianDate(t.date, true)}</span></div>
-                <div class="open-trade-detail"><i class="fas fa-arrow-right"></i><span>${t.entryPriceStr || t.entryPrice}</span></div>
-                <div class="open-trade-detail"><i class="fas fa-shield-alt"></i><span>${t.stopLossStr || t.stopLoss}</span></div>
-                <div class="open-trade-detail"><i class="fas fa-bullseye"></i><span>${t.takeProfitStr || t.takeProfit}</span></div>
+                <div class="open-trade-detail"><i class="fas fa-arrow-right"></i><span>${escapeHTML(t.entryPriceStr || t.entryPrice)}</span></div>
+                <div class="open-trade-detail"><i class="fas fa-shield-alt"></i><span>${escapeHTML(t.stopLossStr || t.stopLoss)}</span></div>
+                <div class="open-trade-detail"><i class="fas fa-bullseye"></i><span>${escapeHTML(t.takeProfitStr || t.takeProfit)}</span></div>
             </div>
             <div class="open-trade-actions">
                 <button class="btn-icon" onclick="openCloseModal(${t.id})" title="بستن"><i class="fas fa-check-circle"></i></button>
@@ -648,15 +711,15 @@ function setRiskPercent(percent) {
 
 async function updateBalance() {
     const input = document.getElementById('newBalanceInput');
-    let nb = parseFloat(input.value);
-    if (isNaN(nb) || nb <= 0) { showNotification('لطفاً یک عدد معتبر وارد کنید.', 'error'); return; }
-    nb = Math.round(nb * 100) / 100;
+    const nb = toNumber(input.value);
+    if (nb <= 0) { showNotification('لطفاً یک عدد معتبر وارد کنید.', 'error'); return; }
+    const rounded = Math.round(nb * 100) / 100;
     const idx = accounts.findIndex(a => a.id === activeAccountId);
     if (idx !== -1) {
-        accounts[idx].balance = nb;
+        accounts[idx].balance = rounded;
         activeAccount = accounts[idx];
-        accountBalance = nb;
-        initialAccountBalance = nb;
+        accountBalance = rounded;
+        initialAccountBalance = rounded;
         await saveAccountsToDB();
     }
     updateBalanceDisplay();
@@ -711,21 +774,22 @@ async function setAccountVip(accountId, vipLevel) {
     showNotification(`سطح ${vipLabel(acc.vipLevel)} برای «${acc.name}» ثبت شد.`, 'success');
 }
 
+// ✅ استفاده از toNumber برای اعداد فارسی/کاما
 function calculateRisk() {
     syncAutoFee();
     const v = id => (document.getElementById(id) || {}).value || '';
-    const entryPriceStr = v('entryPrice').trim();
-    const stopLossStr = v('stopLoss').trim();
-    const takeProfitStr = v('takeProfit').trim();
-    const riskPercentStr = v('riskPercent').trim();
-    const feePercentStr = v('feePercent').trim();
+    const entryPriceStr = String(v('entryPrice')).trim();
+    const stopLossStr = String(v('stopLoss')).trim();
+    const takeProfitStr = String(v('takeProfit')).trim();
+    const riskPercentStr = String(v('riskPercent')).trim();
+    const feePercentStr = String(v('feePercent')).trim();
     const type = v('type');
 
-    const entryPrice = parseFloat(entryPriceStr) || 0;
-    const stopLoss = parseFloat(stopLossStr) || 0;
-    const takeProfit = parseFloat(takeProfitStr) || 0;
-    const riskPercent = parseFloat(riskPercentStr) || 0;
-    const feePct = parseFloat(feePercentStr) || 0;
+    const entryPrice = toNumber(entryPriceStr);
+    const stopLoss = toNumber(stopLossStr);
+    const takeProfit = toNumber(takeProfitStr);
+    const riskPercent = toNumber(riskPercentStr);
+    const feePct = toNumber(feePercentStr);
 
     const setTxt = (id, val) => { const e = document.getElementById(id); if (e) e.textContent = val; };
 
@@ -780,13 +844,13 @@ document.getElementById('tradeForm').addEventListener('submit', async function(e
     const riskPercentStr = v('riskPercent');
     const feePercentStr = v('feePercent');
 
-    const entryPrice = parseFloat(entryPriceStr);
-    const stopLoss = parseFloat(stopLossStr);
-    const takeProfit = parseFloat(takeProfitStr);
-    const riskPercent = parseFloat(riskPercentStr);
-    const feePct = parseFloat(feePercentStr) || 0;
+    const entryPrice = toNumber(entryPriceStr);
+    const stopLoss = toNumber(stopLossStr);
+    const takeProfit = toNumber(takeProfitStr);
+    const riskPercent = toNumber(riskPercentStr);
+    const feePct = toNumber(feePercentStr);
 
-    if (isNaN(entryPrice) || entryPrice <= 0 || isNaN(stopLoss) || stopLoss <= 0 || isNaN(takeProfit) || takeProfit <= 0 || isNaN(riskPercent) || riskPercent <= 0) {
+    if (entryPrice <= 0 || stopLoss <= 0 || takeProfit <= 0 || riskPercent <= 0) {
         showNotification('همه فیلدهای ضروری را پر کنید.', 'error'); return;
     }
     const type = document.getElementById('type').value;
@@ -929,9 +993,9 @@ function loadTrades() {
             <td data-label="ارز"><div class="crypto-badge"><i class="fas fa-coins"></i>${escapeHTML(t.symbol)} ${cam}</div></td>
             <td data-label="تاریخ">${dateText}</td>
             <td data-label="نوع">${typeChip}</td>
-            <td class="price-display" data-label="ورود">${t.entryPriceStr || t.entryPrice}</td>
-            <td class="price-display" data-label="حد ضرر">${t.stopLossStr || t.stopLoss}</td>
-            <td class="price-display" data-label="حد سود">${t.takeProfitStr || t.takeProfit}</td>
+            <td class="price-display" data-label="ورود">${escapeHTML(t.entryPriceStr || t.entryPrice)}</td>
+            <td class="price-display" data-label="حد ضرر">${escapeHTML(t.stopLossStr || t.stopLoss)}</td>
+            <td class="price-display" data-label="حد سود">${escapeHTML(t.takeProfitStr || t.takeProfit)}</td>
             <td data-label="ریسک">${(t.riskPercent || 0).toFixed(2)}%</td>
             <td data-label="کارمزد">${feeTxt}</td>
             <td data-label="وضعیت"><span class="${statusCls}">${statusText}</span></td>
@@ -1031,8 +1095,9 @@ function closeCloseModal() {
 }
 
 async function confirmCloseTrade() {
-    const cp = document.getElementById('closePriceInput').value.trim();
-    if (!cp || isNaN(parseFloat(cp)) || parseFloat(cp) <= 0) { showNotification('قیمت معتبر وارد کنید.', 'error'); return; }
+    const cpStr = document.getElementById('closePriceInput').value.trim();
+    const cp = toNumber(cpStr);
+    if (cp <= 0) { showNotification('قیمت معتبر وارد کنید.', 'error'); return; }
     if (!currentTradeIdForClose) return;
     const idx = trades.findIndex(t => t.id === currentTradeIdForClose);
     if (idx === -1) return;
@@ -1040,16 +1105,18 @@ async function confirmCloseTrade() {
     const wasOpen = t.status === 'open';
 
     trades[idx].status = 'closed';
-    trades[idx].closedPrice = parseFloat(cp);
+    trades[idx].closedPrice = cp;
     trades[idx].closedDate = (!wasOpen && t.closedDate) ? t.closedDate : new Date().toISOString();
 
     const feeStr = document.getElementById('closeFeeInput').value.trim();
-    if (feeStr !== '' && !isNaN(parseFloat(feeStr)) && parseFloat(feeStr) >= 0) {
-        const f = parseFloat(feeStr);
-        trades[idx].totalFee = f;
-        trades[idx].feeEntry = f / 2;
-        trades[idx].feeExit = f / 2;
-        trades[idx].actualFee = f;
+    if (feeStr !== '') {
+        const f = toNumber(feeStr);
+        if (f >= 0) {
+            trades[idx].totalFee = f;
+            trades[idx].feeEntry = f / 2;
+            trades[idx].feeExit = f / 2;
+            trades[idx].actualFee = f;
+        }
     }
 
     if (closeScreenshotData) {
@@ -1068,7 +1135,7 @@ async function confirmCloseTrade() {
     updateMonthlyGrowthChart();
     closeCloseModal();
 
-    const diff = t.type === 'buy' ? parseFloat(cp) - t.entryPrice : t.entryPrice - parseFloat(cp);
+    const diff = t.type === 'buy' ? cp - t.entryPrice : t.entryPrice - cp;
     const pnl = diff * t.positionSize - (trades[idx].totalFee || 0);
     showNotification(`بسته شد. ${pnl >= 0 ? 'سود' : 'ضرر'}: ${formatCurrency(Math.abs(pnl))}`, pnl >= 0 ? 'success' : 'warning');
     checkStorage();
@@ -1183,13 +1250,13 @@ function updateAccountsList() {
 
 async function addNewAccount() {
     const name = document.getElementById('newAccountName').value.trim();
-    const balance = parseFloat(document.getElementById('newAccountBalance').value);
+    const balance = toNumber(document.getElementById('newAccountBalance').value);
     const vip = normalizeVip(document.getElementById('newAccountVip').value);
     if (!name) { showNotification('نام حساب را وارد کنید.', 'error'); return; }
-    if (isNaN(balance) || balance <= 0) { showNotification('موجودی اولیه معتبر وارد کنید.', 'error'); return; }
+    if (balance <= 0) { showNotification('موجودی اولیه معتبر وارد کنید.', 'error'); return; }
     if (accounts.find(a => a.name.toLowerCase() === name.toLowerCase())) { showNotification('این نام قبلاً وجود دارد.', 'error'); return; }
     const newId = accounts.length > 0 ? Math.max(...accounts.map(a => a.id)) + 1 : 1;
-    accounts.push({ id: newId, name, balance, vipLevel: vip });
+    accounts.push({ id: newId, name, balance: Math.round(balance * 100) / 100, vipLevel: vip });
     await saveAccountsToDB();
     document.getElementById('newAccountName').value = '';
     document.getElementById('newAccountBalance').value = '';
@@ -1197,33 +1264,40 @@ async function addNewAccount() {
     showNotification('حساب اضافه شد.', 'success');
 }
 
+// ✅ deleteAccount که واقعاً از IndexedDB پاک می‌کند
 async function deleteAccount(accountId) {
     if (accountId === 1) { showNotification('حساب اصلی حذف نمی‌شود.', 'error'); return; }
     if (accounts.length <= 1) { showNotification('حداقل یک حساب لازم است.', 'error'); return; }
     if (!confirm('حذف این حساب و تمام معاملاتش؟')) return;
-    accounts = accounts.filter(a => a.id !== accountId);
-    const accTrades = await db.getTradesByAccount(accountId);
-    if (accTrades.length > 0) await db.deleteTrades(accTrades.map(t => t.id));
-    if (accountId === activeAccountId) {
-        activeAccountId = 1;
-        activeAccount = accounts.find(a => a.id === 1);
-        accountBalance = activeAccount ? activeAccount.balance : 0;
-        initialAccountBalance = accountBalance;
+    try {
+        await db.deleteAccount(accountId);
+        const accTrades = await db.getTradesByAccount(accountId);
+        if (accTrades.length > 0) await db.deleteTrades(accTrades.map(t => t.id));
+        accounts = accounts.filter(a => a.id !== accountId);
+        if (accountId === activeAccountId) {
+            activeAccountId = 1;
+            activeAccount = accounts.find(a => a.id === 1);
+            accountBalance = activeAccount ? activeAccount.balance : 0;
+            initialAccountBalance = accountBalance;
+        }
+        trades = await db.getTradesByAccount(activeAccountId);
+        await saveAccountsToDB();
+        updateBalanceDisplay();
+        updateAccountsList();
+        loadTrades();
+        loadOpenTrades();
+        updateStats();
+        updateDetailedStats();
+        updateTotalRisk();
+        updateGrowthChart();
+        updateMonthlyGrowthChart();
+        setInitialMonthBasedOnLastTrade();
+        updateMonthlyDashboard();
+        showNotification('حساب حذف شد.', 'warning');
+    } catch (e) {
+        console.error(e);
+        showNotification('خطا در حذف حساب.', 'error');
     }
-    trades = await db.getTradesByAccount(activeAccountId);
-    await saveAccountsToDB();
-    updateBalanceDisplay();
-    updateAccountsList();
-    loadTrades();
-    loadOpenTrades();
-    updateStats();
-    updateDetailedStats();
-    updateTotalRisk();
-    updateGrowthChart();
-    updateMonthlyGrowthChart();
-    setInitialMonthBasedOnLastTrade();
-    updateMonthlyDashboard();
-    showNotification('حساب حذف شد.', 'warning');
 }
 
 async function switchAccount(accountId) {
@@ -1304,8 +1378,8 @@ function updateMonthlyDashboard() {
             <td data-label="تاریخ">${formatPersianDate(t.date, true)}</td>
             <td data-label="ارز"><span class="crypto-badge" style="font-size:0.8rem;">${escapeHTML(t.symbol)}</span></td>
             <td data-label="نوع">${t.type === 'buy' ? 'لانگ' : 'شورت'}</td>
-            <td class="price-display" data-label="ورود">${t.entryPriceStr || t.entryPrice}</td>
-            <td class="price-display" data-label="خروج">${t.status === 'closed' ? t.closedPrice : '-'}</td>
+            <td class="price-display" data-label="ورود">${escapeHTML(t.entryPriceStr || t.entryPrice)}</td>
+            <td class="price-display" data-label="خروج">${t.status === 'closed' ? escapeHTML(t.closedPrice) : '-'}</td>
             <td data-label="سود/ضرر"><span class="${pnlCls}">${pnlTxt}</span></td>
             <td data-label="وضعیت"><span class="${t.status === 'open' ? 'profit' : 'neutral'}">${t.status === 'open' ? 'باز' : 'بسته'}</span></td>
         </tr>`;
@@ -1389,12 +1463,16 @@ async function importData() {
     isImportCancelled = false;
     importStartTime = Date.now();
     let snapshot = null, wiped = false;
+    let failedCount = 0;  // ✅ شمارش خطاها
     const restore = async () => {
         if (!wiped || !snapshot) return;
         try {
             await db.clearAll();
             await db.saveAccounts(snapshot.accounts || []);
             await db.saveTrades(snapshot.trades || []);
+            if (snapshot.settings) {
+                for (const s of snapshot.settings) await db.saveSetting(s.key, s.value);
+            }
             if (snapshot.activeId) await db.saveSetting('activeAccountId', snapshot.activeId);
             await loadAccountsFromDB();
             await loadTradesFromDB();
@@ -1420,16 +1498,21 @@ async function importData() {
         if (imgFolder) {
             imgFolder.forEach(() => total++);
             const proms = [];
-            imgFolder.forEach(async (rel, f) => {
+            imgFolder.forEach((rel, f) => {
                 if (!f.dir) {
-                    proms.push(f.async('base64').then(content => {
-                        if (isImportCancelled) return;
-                        const name = rel.split('/').pop();
-                        imagesMap.set(name, `data:${getMimeType(name)};base64,${content}`);
-                        done++;
-                        const pct = 30 + Math.floor((done / Math.max(1, total)) * 30);
-                        showProgress(`تصویر ${done}/${total}`, pct);
-                    }));
+                    proms.push(
+                        f.async('base64').then(content => {
+                            if (isImportCancelled) return;
+                            const name = rel.split('/').pop();
+                            imagesMap.set(name, `data:${getMimeType(name)};base64,${content}`);
+                            done++;
+                            const pct = 30 + Math.floor((done / Math.max(1, total)) * 30);
+                            showProgress(`تصویر ${done}/${total}`, pct);
+                        }).catch(err => {
+                            console.warn('تصویر خراب نادیده گرفته شد:', rel, err);
+                            done++;
+                        })
+                    );
                 }
             });
             await Promise.all(proms);
@@ -1471,20 +1554,29 @@ async function importData() {
             await db.saveAccounts(backupData.accounts);
             accounts = backupData.accounts;
         }
+        // ✅ بازگردانی settings (customStrategies و غیره)
+        if (backupData.settings && Array.isArray(backupData.settings)) {
+            for (const s of backupData.settings) {
+                try { await db.saveSetting(s.key, s.value); } catch (e) { console.warn('skip setting', s.key); }
+            }
+            const cs = backupData.settings.find(s => s.key === 'customStrategies');
+            if (cs) { try { customStrategies = JSON.parse(cs.value || '[]'); } catch (e) {} }
+        }
         if (backupData.trades && Array.isArray(backupData.trades)) {
-            const batch = 20, total = backupData.trades.length;
+            const batch = 20, totalT = backupData.trades.length;
             trades = [];
-            for (let i = 0; i < total; i += batch) {
+            for (let i = 0; i < totalT; i += batch) {
                 if (isImportCancelled) { await restore(); showNotification('لغو و بازگردانی', 'warning'); hideProgress(); return; }
                 const b = backupData.trades.slice(i, i + batch);
                 for (const t of b) {
                     try { await db.saveTrade(t); trades.push(t); }
                     catch (e) {
                         if (e.message.includes('فضا')) { isImportCancelled = true; await restore(); hideProgress(); showNotification(e.message, 'error'); return; }
-                        console.error(e);
+                        failedCount++;
+                        console.error('خطا در ذخیره معامله', t.id, e);
                     }
                 }
-                showProgress(`ذخیره ${i + b.length}/${total}`, 70 + Math.floor((i / total) * 25));
+                showProgress(`ذخیره ${i + b.length}/${totalT}`, 70 + Math.floor((i / totalT) * 25));
                 await new Promise(r => setTimeout(r, 5));
             }
         }
@@ -1507,9 +1599,14 @@ async function importData() {
         updateMonthlyGrowthChart();
         setInitialMonthBasedOnLastTrade();
         updateMonthlyDashboard();
+        refreshStrategyList();
         fileInput.value = '';
         setTimeout(hideProgress, 2000);
-        showNotification(`✅ بارگذاری شد. ${trades.length} معامله`, 'success');
+        if (failedCount > 0) {
+            showNotification(`⚠️ بارگذاری شد ولی ${failedCount} معامله ذخیره نشد (${trades.length} از ${backupData.trades?.length || 0})`, 'warning');
+        } else {
+            showNotification(`✅ بارگذاری شد. ${trades.length} معامله`, 'success');
+        }
         checkStorage();
     } catch (e) {
         console.error(e); await restore(); hideProgress();
@@ -1560,9 +1657,15 @@ document.addEventListener('DOMContentLoaded', function() {
     if (typeEl) typeEl.addEventListener('change', calculateRisk);
 
     const nb = document.getElementById('newBalanceInput');
-    if (nb) nb.addEventListener('input', function() { const v = parseFloat(this.value); if (!isNaN(v) && v > 0) this.value = Math.round(v * 100) / 100; });
+    if (nb) nb.addEventListener('input', function() {
+        const v = toNumber(this.value);
+        if (v > 0) this.value = Math.round(v * 100) / 100;
+    });
     const nab = document.getElementById('newAccountBalance');
-    if (nab) nab.addEventListener('input', function() { const v = parseFloat(this.value); if (!isNaN(v) && v > 0) this.value = Math.round(v * 100) / 100; });
+    if (nab) nab.addEventListener('input', function() {
+        const v = toNumber(this.value);
+        if (v > 0) this.value = Math.round(v * 100) / 100;
+    });
 
     const dm = document.getElementById('detailsModal');
     if (dm) dm.addEventListener('click', e => { if (e.target === dm) closeDetailsModal(); });
