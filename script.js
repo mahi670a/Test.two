@@ -1,3 +1,8 @@
+// ============================================================
+// JournalMe Finance - منطق کامل
+// ============================================================
+
+// ===== توابع تاریخ شمسی =====
 function getPersianDateParts(date) {
     if (!date) return null;
     const d = new Date(date);
@@ -19,7 +24,7 @@ function getPersianDateParts(date) {
     return { year: y, month: m, day: dd };
 }
 
-function toPersianDateWithEnglishNumbers(date, withTime = true) {
+function toPersianDate(date, withTime = false) {
     if (!date) return '';
     const d = new Date(date);
     if (isNaN(d)) return '';
@@ -42,11 +47,6 @@ function toPersianDateWithEnglishNumbers(date, withTime = true) {
     return withTime ? `${y}/${m}/${dy} ${conv(h)}:${conv(mi)}` : `${y}/${m}/${dy}`;
 }
 
-function formatPersianDate(date, withTime = true) {
-    return toPersianDateWithEnglishNumbers(date, withTime);
-}
-
-// ✅ تبدیل امن رشته به عدد: ارقام فارسی، کاما، فاصله
 function toNumber(str) {
     if (typeof str === 'number') return str;
     if (!str) return 0;
@@ -56,13 +56,17 @@ function toNumber(str) {
     return isNaN(n) ? 0 : n;
 }
 
-function generateUID() {
-    return 'trade_' + Date.now() + '_' + Math.random().toString(36).slice(2, 11);
+function formatMoney(num) {
+    const n = parseFloat(num) || 0;
+    return Math.round(n).toLocaleString('en-US');
 }
 
-// ✅ ID یکتا با فضای نمونه‌ی بزرگ (کاهش تصادم در import)
-function generateTradeId() {
+function generateId() {
     return Date.now() * 1000000 + Math.floor(Math.random() * 1000000);
+}
+
+function generateUID() {
+    return 'tx_' + Date.now() + '_' + Math.random().toString(36).slice(2, 11);
 }
 
 function getMimeType(name) {
@@ -72,23 +76,55 @@ function getMimeType(name) {
     return types[ext] || 'image/png';
 }
 
-let editingTradeId = null;
-let editBaseBalance = null;
-const PRESET_STRATEGIES = ['SL', 'Breakout', 'Candle Setup'];
-let customStrategies = [];
-let isImportCancelled = false;
-let importStartTime = 0;
-let accountGrowthChart = null;
-let monthlyGrowthChart = null;
-
 function escapeHTML(v) {
     return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-class TradingJournalDB {
+// ===== دسته‌های پیش‌فرض =====
+const DEFAULT_CATEGORIES = {
+    income: [
+        { name: 'حقوق', icon: 'fa-briefcase' },
+        { name: 'فریلنس', icon: 'fa-laptop' },
+        { name: 'سود بانکی', icon: 'fa-university' },
+        { name: 'هدیه', icon: 'fa-gift' },
+        { name: 'فروش', icon: 'fa-tag' },
+        { name: 'سایر درآمد', icon: 'fa-plus' }
+    ],
+    expense: [
+        { name: 'غذا', icon: 'fa-utensils' },
+        { name: 'حمل‌ونقل', icon: 'fa-car' },
+        { name: 'مسکن', icon: 'fa-home' },
+        { name: 'قبض', icon: 'fa-file-invoice' },
+        { name: 'خرید', icon: 'fa-shopping-bag' },
+        { name: 'درمان', icon: 'fa-hospital' },
+        { name: 'تفریح', icon: 'fa-gamepad' },
+        { name: 'آموزش', icon: 'fa-graduation-cap' },
+        { name: 'سایر هزینه', icon: 'fa-ellipsis-h' }
+    ],
+    investment: [
+        { name: 'کریپتو', icon: 'fa-bitcoin' },
+        { name: 'طلا', icon: 'fa-coins' },
+        { name: 'سهام', icon: 'fa-chart-line' },
+        { name: 'صندوق', icon: 'fa-chart-pie' },
+        { name: 'سپرده', icon: 'fa-lock' },
+        { name: 'سایر سرمایه‌گذاری', icon: 'fa-gem' }
+    ]
+};
+
+const ACCOUNT_TYPES = {
+    cash: { label: 'نقدی', icon: 'fa-money-bill-wave' },
+    bank: { label: 'بانکی', icon: 'fa-university' },
+    crypto: { label: 'کریپتو', icon: 'fa-bitcoin' },
+    gold: { label: 'طلا', icon: 'fa-coins' },
+    stock: { label: 'سهام', icon: 'fa-chart-line' },
+    other: { label: 'سایر', icon: 'fa-wallet' }
+};
+
+// ===== IndexedDB =====
+class FinanceDB {
     constructor() {
-        this.dbName = 'CryptoJournal';
-        this.version = 4;
+        this.dbName = 'JournalMeFinance';
+        this.version = 1;
         this.db = null;
         this.isReady = false;
     }
@@ -105,194 +141,24 @@ class TradingJournalDB {
             };
             req.onupgradeneeded = (ev) => {
                 const db = ev.target.result;
-                const oldV = ev.oldVersion;
-                if (oldV < 1) {
-                    const ts = db.createObjectStore('trades', { keyPath: 'id' });
+                if (!db.objectStoreNames.contains('transactions')) {
+                    const ts = db.createObjectStore('transactions', { keyPath: 'id' });
                     ts.createIndex('uid', 'uid', { unique: true });
-                    ts.createIndex('accountId', 'accountId', { unique: false });
+                    ts.createIndex('type', 'type', { unique: false });
                     ts.createIndex('date', 'date', { unique: false });
-                    ts.createIndex('status', 'status', { unique: false });
+                    ts.createIndex('accountId', 'accountId', { unique: false });
+                }
+                if (!db.objectStoreNames.contains('accounts')) {
                     db.createObjectStore('accounts', { keyPath: 'id' });
+                }
+                if (!db.objectStoreNames.contains('categories')) {
+                    const cs = db.createObjectStore('categories', { keyPath: 'id' });
+                    cs.createIndex('type', 'type', { unique: false });
+                }
+                if (!db.objectStoreNames.contains('settings')) {
                     db.createObjectStore('settings', { keyPath: 'key' });
                 }
-                if (oldV < 2) {
-                    if (!db.objectStoreNames.contains('trades')) return;
-                    const ts = ev.target.transaction.objectStore('trades');
-                    if (!ts.indexNames.contains('uid')) ts.createIndex('uid', 'uid', { unique: true });
-                }
             };
-        });
-    }
-
-    // ✅ resolve بعد از tx.oncomplete (نه req.onsuccess)
-    saveTrade(trade) {
-        this.checkReady();
-        return new Promise((resolve, reject) => {
-            let tx;
-            try {
-                tx = this.db.transaction(['trades'], 'readwrite');
-                tx.objectStore('trades').put(trade);
-            } catch (e) { return reject(e); }
-            tx.oncomplete = () => resolve(trade.id);
-            tx.onerror = () => {
-                const err = tx.error;
-                if (err && err.name === 'QuotaExceededError') reject(new Error('⚠️ فضای ذخیره‌سازی کافی نیست. لطفاً بکاپ بگیرید و داده‌های قدیمی را حذف کنید.'));
-                else reject(err || new Error('خطا در ذخیره معامله'));
-            };
-            tx.onabort = () => reject(tx.error || new Error('تراکنش لغو شد'));
-        });
-    }
-
-    saveTrades(tradesArray) {
-        this.checkReady();
-        return new Promise((resolve, reject) => {
-            let tx;
-            try {
-                tx = this.db.transaction(['trades'], 'readwrite');
-                const store = tx.objectStore('trades');
-                for (const t of tradesArray) store.put(t);
-            } catch (e) { return reject(e); }
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
-            tx.onabort = () => {
-                const err = tx.error;
-                if (err && err.name === 'QuotaExceededError') reject(new Error('⚠️ فضای ذخیره‌سازی کافی نیست'));
-                else reject(err || new Error('تراکنش لغو شد'));
-            };
-        });
-    }
-
-    getTradesByAccount(accountId) {
-        this.checkReady();
-        return new Promise((resolve, reject) => {
-            const tx = this.db.transaction(['trades'], 'readonly');
-            const req = tx.objectStore('trades').index('accountId').getAll(parseInt(accountId));
-            req.onsuccess = () => resolve(req.result || []);
-            req.onerror = () => reject(req.error);
-        });
-    }
-
-    getAllTrades() {
-        this.checkReady();
-        return new Promise((resolve, reject) => {
-            const tx = this.db.transaction(['trades'], 'readonly');
-            const req = tx.objectStore('trades').getAll();
-            req.onsuccess = () => resolve(req.result || []);
-            req.onerror = () => reject(req.error);
-        });
-    }
-
-    getTradeById(tradeId) {
-        this.checkReady();
-        return new Promise((resolve, reject) => {
-            const tx = this.db.transaction(['trades'], 'readonly');
-            const req = tx.objectStore('trades').get(parseInt(tradeId));
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = () => reject(req.error);
-        });
-    }
-
-    deleteTrade(tradeId) {
-        this.checkReady();
-        return new Promise((resolve, reject) => {
-            let tx;
-            try {
-                tx = this.db.transaction(['trades'], 'readwrite');
-                tx.objectStore('trades').delete(parseInt(tradeId));
-            } catch (e) { return reject(e); }
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
-            tx.onabort = () => reject(tx.error || new Error('aborted'));
-        });
-    }
-
-    deleteTrades(tradeIds) {
-        this.checkReady();
-        return new Promise((resolve, reject) => {
-            let tx;
-            try {
-                tx = this.db.transaction(['trades'], 'readwrite');
-                const store = tx.objectStore('trades');
-                for (const id of tradeIds) store.delete(parseInt(id));
-            } catch (e) { return reject(e); }
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
-            tx.onabort = () => reject(tx.error || new Error('aborted'));
-        });
-    }
-
-    saveAccounts(arr) {
-        this.checkReady();
-        return new Promise((resolve, reject) => {
-            let tx;
-            try {
-                tx = this.db.transaction(['accounts'], 'readwrite');
-                const store = tx.objectStore('accounts');
-                for (const a of arr) store.put(a);
-            } catch (e) { return reject(e); }
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
-            tx.onabort = () => reject(tx.error || new Error('aborted'));
-        });
-    }
-
-    getAccounts() {
-        this.checkReady();
-        return new Promise((resolve, reject) => {
-            const tx = this.db.transaction(['accounts'], 'readonly');
-            const req = tx.objectStore('accounts').getAll();
-            req.onsuccess = () => resolve(req.result || []);
-            req.onerror = () => reject(req.error);
-        });
-    }
-
-    // ✅ deleteAccount که واقعاً پاک می‌کند
-    deleteAccount(accountId) {
-        this.checkReady();
-        return new Promise((resolve, reject) => {
-            let tx;
-            try {
-                tx = this.db.transaction(['accounts'], 'readwrite');
-                tx.objectStore('accounts').delete(parseInt(accountId));
-            } catch (e) { return reject(e); }
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
-            tx.onabort = () => reject(tx.error || new Error('aborted'));
-        });
-    }
-
-    // ✅ saveSetting بعد از tx.oncomplete
-    saveSetting(key, value) {
-        this.checkReady();
-        return new Promise((resolve, reject) => {
-            let tx;
-            try {
-                tx = this.db.transaction(['settings'], 'readwrite');
-                tx.objectStore('settings').put({ key, value });
-            } catch (e) { return reject(e); }
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
-            tx.onabort = () => reject(tx.error || new Error('aborted'));
-        });
-    }
-
-    getSetting(key) {
-        this.checkReady();
-        return new Promise((resolve, reject) => {
-            const tx = this.db.transaction(['settings'], 'readonly');
-            const req = tx.objectStore('settings').get(key);
-            req.onsuccess = () => resolve(req.result?.value);
-            req.onerror = () => reject(req.error);
-        });
-    }
-
-    getAllSettings() {
-        this.checkReady();
-        return new Promise((resolve, reject) => {
-            const tx = this.db.transaction(['settings'], 'readonly');
-            const req = tx.objectStore('settings').getAll();
-            req.onsuccess = () => resolve(req.result || []);
-            req.onerror = () => reject(req.error);
         });
     }
 
@@ -300,672 +166,631 @@ class TradingJournalDB {
         if (!this.isReady || !this.db) throw new Error('دیتابیس آماده نیست');
     }
 
-    // ✅ backup شامل settings
+    saveTransaction(tx) {
+        this.checkReady();
+        return new Promise((resolve, reject) => {
+            let t;
+            try {
+                t = this.db.transaction(['transactions'], 'readwrite');
+                t.objectStore('transactions').put(tx);
+            } catch (e) { return reject(e); }
+            t.oncomplete = () => resolve(tx.id);
+            t.onerror = () => {
+                const err = t.error;
+                if (err && err.name === 'QuotaExceededError') reject(new Error('⚠️ فضای ذخیره‌سازی کافی نیست'));
+                else reject(err);
+            };
+            t.onabort = () => reject(t.error || new Error('aborted'));
+        });
+    }
+
+    getAllTransactions() {
+        this.checkReady();
+        return new Promise((resolve, reject) => {
+            const t = this.db.transaction(['transactions'], 'readonly');
+            const r = t.objectStore('transactions').getAll();
+            r.onsuccess = () => resolve(r.result || []);
+            r.onerror = () => reject(r.error);
+        });
+    }
+
+    getTransactionById(id) {
+        this.checkReady();
+        return new Promise((resolve, reject) => {
+            const t = this.db.transaction(['transactions'], 'readonly');
+            const r = t.objectStore('transactions').get(parseInt(id));
+            r.onsuccess = () => resolve(r.result);
+            r.onerror = () => reject(r.error);
+        });
+    }
+
+    deleteTransaction(id) {
+        this.checkReady();
+        return new Promise((resolve, reject) => {
+            let t;
+            try {
+                t = this.db.transaction(['transactions'], 'readwrite');
+                t.objectStore('transactions').delete(parseInt(id));
+            } catch (e) { return reject(e); }
+            t.oncomplete = () => resolve();
+            t.onerror = () => reject(t.error);
+            t.onabort = () => reject(t.error || new Error('aborted'));
+        });
+    }
+
+    saveAccounts(arr) {
+        this.checkReady();
+        return new Promise((resolve, reject) => {
+            let t;
+            try {
+                t = this.db.transaction(['accounts'], 'readwrite');
+                const store = t.objectStore('accounts');
+                for (const a of arr) store.put(a);
+            } catch (e) { return reject(e); }
+            t.oncomplete = () => resolve();
+            t.onerror = () => reject(t.error);
+            t.onabort = () => reject(t.error || new Error('aborted'));
+        });
+    }
+
+    getAccounts() {
+        this.checkReady();
+        return new Promise((resolve, reject) => {
+            const t = this.db.transaction(['accounts'], 'readonly');
+            const r = t.objectStore('accounts').getAll();
+            r.onsuccess = () => resolve(r.result || []);
+            r.onerror = () => reject(r.error);
+        });
+    }
+
+    deleteAccount(id) {
+        this.checkReady();
+        return new Promise((resolve, reject) => {
+            let t;
+            try {
+                t = this.db.transaction(['accounts'], 'readwrite');
+                t.objectStore('accounts').delete(parseInt(id));
+            } catch (e) { return reject(e); }
+            t.oncomplete = () => resolve();
+            t.onerror = () => reject(t.error);
+            t.onabort = () => reject(t.error || new Error('aborted'));
+        });
+    }
+
+    saveCategories(arr) {
+        this.checkReady();
+        return new Promise((resolve, reject) => {
+            let t;
+            try {
+                t = this.db.transaction(['categories'], 'readwrite');
+                const store = t.objectStore('categories');
+                for (const c of arr) store.put(c);
+            } catch (e) { return reject(e); }
+            t.oncomplete = () => resolve();
+            t.onerror = () => reject(t.error);
+            t.onabort = () => reject(t.error || new Error('aborted'));
+        });
+    }
+
+    getCategories() {
+        this.checkReady();
+        return new Promise((resolve, reject) => {
+            const t = this.db.transaction(['categories'], 'readonly');
+            const r = t.objectStore('categories').getAll();
+            r.onsuccess = () => resolve(r.result || []);
+            r.onerror = () => reject(r.error);
+        });
+    }
+
+    saveSetting(key, value) {
+        this.checkReady();
+        return new Promise((resolve, reject) => {
+            let t;
+            try {
+                t = this.db.transaction(['settings'], 'readwrite');
+                t.objectStore('settings').put({ key, value });
+            } catch (e) { return reject(e); }
+            t.oncomplete = () => resolve();
+            t.onerror = () => reject(t.error);
+            t.onabort = () => reject(t.error || new Error('aborted'));
+        });
+    }
+
+    getSetting(key) {
+        this.checkReady();
+        return new Promise((resolve, reject) => {
+            const t = this.db.transaction(['settings'], 'readonly');
+            const r = t.objectStore('settings').get(key);
+            r.onsuccess = () => resolve(r.result?.value);
+            r.onerror = () => reject(r.error);
+        });
+    }
+
+    getAllSettings() {
+        this.checkReady();
+        return new Promise((resolve, reject) => {
+            const t = this.db.transaction(['settings'], 'readonly');
+            const r = t.objectStore('settings').getAll();
+            r.onsuccess = () => resolve(r.result || []);
+            r.onerror = () => reject(r.error);
+        });
+    }
+
     async backup() {
+        const transactions = await this.getAllTransactions();
         const accounts = await this.getAccounts();
-        const trades = await this.getAllTrades();
+        const categories = await this.getCategories();
         const settings = await this.getAllSettings();
-        return { accounts, trades, settings, exportDate: new Date().toISOString(), version: '4.1' };
+        return { transactions, accounts, categories, settings, exportDate: new Date().toISOString(), version: '1.0' };
     }
 
     clearAll() {
         this.checkReady();
         const clear = (name) => new Promise((resolve, reject) => {
-            const tx = this.db.transaction([name], 'readwrite');
-            tx.objectStore(name).clear();
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
-            tx.onabort = () => reject(tx.error || new Error('aborted'));
+            const t = this.db.transaction([name], 'readwrite');
+            t.objectStore(name).clear();
+            t.oncomplete = () => resolve();
+            t.onerror = () => reject(t.error);
+            t.onabort = () => reject(t.error || new Error('aborted'));
         });
-        return Promise.all([clear('trades'), clear('accounts'), clear('settings')]);
-    }
-
-    async upgradeOldTrades() {
-        try {
-            const all = await this.getAllTrades();
-            if (!all || all.length === 0) return;
-            let changed = false;
-            for (const t of all) {
-                if (!t.uid) { t.uid = `trade_${t.id}`; changed = true; }
-                if (t.baseBalanceAtEntry == null) {
-                    if (t.riskPercent > 0 && t.totalRiskAmount > 0) t.baseBalanceAtEntry = t.totalRiskAmount * 100 / t.riskPercent;
-                    changed = true;
-                }
-                if (t.entryScreenshot && !String(t.entryScreenshot).startsWith('data:image')) { t.entryScreenshot = null; t.entryScreenshotName = null; changed = true; }
-                if (t.exitScreenshot && !String(t.exitScreenshot).startsWith('data:image')) { t.exitScreenshot = null; t.exitScreenshotName = null; changed = true; }
-                if (t.entryScreenshot && !t.entryScreenshotName) { t.entryScreenshotName = `entry_${t.uid}.png`; changed = true; }
-                if (t.exitScreenshot && !t.exitScreenshotName) { t.exitScreenshotName = `exit_${t.uid}.png`; changed = true; }
-            }
-            if (changed) { await this.saveTrades(all); console.log('✅ migration انجام شد'); }
-        } catch (e) { console.error('migration error:', e); }
+        return Promise.all([clear('transactions'), clear('accounts'), clear('categories'), clear('settings')]);
     }
 }
 
-const db = new TradingJournalDB();
+const db = new FinanceDB();
 
+// ===== State =====
+let transactions = [];
 let accounts = [];
-let activeAccountId = 1;
-let activeAccount = null;
-let accountBalance = 0;
-let initialAccountBalance = 0;
-let trades = [];
+let categories = [];
+let currency = 'تومان';
+let currentType = 'expense';
+let editingTransactionId = null;
+let currentAttachmentData = null;
+let trendChart = null;
+let incomeExpenseChart = null;
+let categoryChart = null;
+let isImportCancelled = false;
 
-let currentYear = null;
-let currentMonth = null;
-let currentTradeIdForClose = null;
-let closeScreenshotData = null;
-
-const persianMonths = ['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند'];
+// ===== Utils =====
+function formatCurrency(num) {
+    return formatMoney(num) + ' ' + currency;
+}
 
 function switchSection(sectionId) {
-    document.querySelectorAll('.section, .dashboard-section').forEach(s => s.classList.remove('active-section'));
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active-section'));
     const target = document.getElementById(sectionId + '-section');
     if (target) target.classList.add('active-section');
     document.querySelectorAll('.toolbar-btn').forEach(b => b.classList.remove('active'));
-    const activeBtn = document.querySelector(`.toolbar-btn[data-section="${sectionId}"]`);
-    if (activeBtn) activeBtn.classList.add('active');
-    const bal = document.getElementById('balanceSection');
-    if (bal) {
-        if (sectionId === 'trade-form') bal.classList.remove('hidden-section');
-        else bal.classList.add('hidden-section');
+    const btn = document.querySelector(`.toolbar-btn[data-section="${sectionId}"]`);
+    if (btn) btn.classList.add('active');
+
+    if (sectionId === 'dashboard') updateDashboard();
+    if (sectionId === 'history') loadTransactions();
+    if (sectionId === 'analysis') updateAnalysis();
+    if (sectionId === 'accounts') renderAccounts();
+    if (sectionId === 'transaction-form') {
+        // reset در حالت جدید
     }
-    if (sectionId === 'stats') { updateStats(); updateDetailedStats(); updateGrowthChart(); }
-    if (sectionId === 'dashboard') { updateMonthlyDashboard(); updateMonthlyGrowthChart(); }
-    if (sectionId === 'history') loadTrades();
-    if (sectionId === 'trade-form') loadOpenTrades();
-    closeAllModals();
 }
 
-function updateDetailedStats() {
-    const el = id => document.getElementById(id);
-    if (el('initialBalance')) el('initialBalance').textContent = formatCurrency(initialAccountBalance);
-    const totalPnL = calculateTotalPnL();
-    if (el('currentBalanceStats')) el('currentBalanceStats').textContent = formatCurrency(initialAccountBalance + totalPnL);
-    const tpnl = el('totalPnLStats');
-    if (tpnl) { tpnl.textContent = (totalPnL >= 0 ? '+' : '') + formatCurrency(Math.abs(totalPnL)); tpnl.style.color = totalPnL >= 0 ? '#10b981' : '#ef4444'; }
-    const profitPct = initialAccountBalance > 0 ? (totalPnL / initialAccountBalance) * 100 : 0;
-    const pp = el('profitPercentage');
-    if (pp) { pp.textContent = (profitPct >= 0 ? '+' : '') + profitPct.toFixed(2) + '%'; pp.className = profitPct >= 0 ? 'stats-value percentage-box' : 'stats-value percentage-box negative'; }
-    const np = el('netProfit');
-    if (np) { np.textContent = formatCurrency(calculateTotalProfit()); np.className = 'stats-value positive-box'; }
-    const nl = el('netLoss');
-    if (nl) { nl.textContent = formatCurrency(calculateTotalLoss()); nl.className = 'stats-value negative-box'; }
-    if (el('totalTradesStats')) el('totalTradesStats').textContent = trades.length;
-    if (el('longTradesCount')) el('longTradesCount').textContent = trades.filter(t => t.type === 'buy').length;
-    if (el('shortTradesCount')) el('shortTradesCount').textContent = trades.filter(t => t.type === 'sell').length;
-}
-
-function updateGrowthChart() {
-    const canvas = document.getElementById('accountGrowthChart');
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    const closed = [...trades].filter(t => t.status === 'closed').sort((a, b) => new Date(a.closedDate || a.date) - new Date(b.closedDate || b.date));
-    let bal = initialAccountBalance;
-    const history = [bal];
-    const labels = [0];
-    closed.forEach((t, i) => { bal += calculateTradePnL(t); history.push(bal); labels.push(i + 1); });
-    if (closed.length === 0) { history.push(initialAccountBalance); labels.push(1); }
-    if (accountGrowthChart) accountGrowthChart.destroy();
-    accountGrowthChart = new Chart(ctx, {
-        type: 'line',
-        data: { labels, datasets: [{ label: 'رشد حساب ($)', data: history, borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.1)', borderWidth: 4, pointBackgroundColor: '#60a5fa', pointBorderColor: '#1e293b', pointRadius: 5, pointHoverRadius: 8, tension: 0.1, fill: true }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1e293b', titleColor: '#f1f5f9', bodyColor: '#94a3b8', borderColor: '#3b82f6', borderWidth: 2 } }, scales: { x: { grid: { color: 'rgba(71,85,105,0.2)' }, ticks: { color: '#94a3b8' }, title: { display: true, text: 'تعداد معاملات', color: '#cbd5e1' } }, y: { grid: { color: 'rgba(71,85,105,0.2)' }, ticks: { color: '#94a3b8', callback: v => '$' + v }, title: { display: true, text: 'رشد سرمایه ($)', color: '#cbd5e1' } } } }
-    });
-}
-
-// ✅ نمودار ماهانه از بالانس اول ماه شروع می‌شود
-function updateMonthlyGrowthChart() {
-    const canvas = document.getElementById('monthlyGrowthChart');
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    const monthly = trades.filter(t => {
-        if (t.accountId !== activeAccountId) return false;
-        const pd = getPersianDateParts(t.date);
-        return pd && pd.year === currentYear && pd.month === currentMonth;
-    });
-    const closed = [...monthly].filter(t => t.status === 'closed').sort((a, b) => new Date(a.date) - new Date(b.date));
-
-    // بالانس اول ماه = initialAccountBalance + ΣPnL(معاملات قبل از این ماه)
-    const monthStartBalance = initialAccountBalance + trades
-        .filter(t => t.accountId === activeAccountId && t.status === 'closed')
-        .filter(t => {
-            const pd = getPersianDateParts(t.date);
-            if (!pd) return false;
-            return (pd.year < currentYear) || (pd.year === currentYear && pd.month < currentMonth);
-        })
-        .reduce((s, t) => s + calculateTradePnL(t), 0);
-
-    let bal = monthStartBalance;
-    const history = [bal];
-    const labels = [0];
-    closed.forEach((t, i) => { bal += calculateTradePnL(t); history.push(bal); labels.push(i + 1); });
-    if (closed.length === 0) { history.push(monthStartBalance); labels.push(1); }
-    if (monthlyGrowthChart) monthlyGrowthChart.destroy();
-    monthlyGrowthChart = new Chart(ctx, {
-        type: 'line',
-        data: { labels, datasets: [{ label: 'رشد ماهانه ($)', data: history, borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.1)', borderWidth: 4, pointBackgroundColor: '#fbbf24', pointBorderColor: '#1e293b', pointRadius: 5, pointHoverRadius: 8, tension: 0.1, fill: true }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1e293b', titleColor: '#f1f5f9', bodyColor: '#94a3b8', borderColor: '#f59e0b', borderWidth: 2 } }, scales: { x: { grid: { color: 'rgba(71,85,105,0.2)' }, ticks: { color: '#94a3b8' }, title: { display: true, text: 'تعداد معاملات', color: '#cbd5e1' } }, y: { grid: { color: 'rgba(71,85,105,0.2)' }, ticks: { color: '#94a3b8', callback: v => '$' + v }, title: { display: true, text: 'رشد سرمایه ($)', color: '#cbd5e1' } } } }
-    });
-}
-
-function loadOpenTrades() {
-    const list = document.getElementById('openTradesList');
-    if (!list) return;
-    const openTrades = trades.filter(t => t.status === 'open' && t.accountId === activeAccountId);
-    if (openTrades.length === 0) {
-        list.innerHTML = '<div class="no-open-trades"><i class="fas fa-check-circle"></i> هیچ معامله بازی وجود ندارد</div>';
-        return;
-    }
-    let html = '';
-    openTrades.forEach(t => {
-        const typeText = t.type === 'buy' ? 'لانگ' : 'شورت';
-        const icon = t.type === 'buy' ? 'fa-arrow-up' : 'fa-arrow-down';
-        const color = t.type === 'buy' ? '#10b981' : '#ef4444';
-        html += `<div class="open-trade-item">
-            <div class="open-trade-info">
-                <span class="open-trade-symbol">${escapeHTML(t.symbol)}</span>
-                <div class="open-trade-detail"><i class="fas ${icon}" style="color:${color}"></i><span>${typeText}</span></div>
-                <div class="open-trade-detail"><i class="fas fa-calendar"></i><span>${formatPersianDate(t.date, true)}</span></div>
-                <div class="open-trade-detail"><i class="fas fa-arrow-right"></i><span>${escapeHTML(t.entryPriceStr || t.entryPrice)}</span></div>
-                <div class="open-trade-detail"><i class="fas fa-shield-alt"></i><span>${escapeHTML(t.stopLossStr || t.stopLoss)}</span></div>
-                <div class="open-trade-detail"><i class="fas fa-bullseye"></i><span>${escapeHTML(t.takeProfitStr || t.takeProfit)}</span></div>
-            </div>
-            <div class="open-trade-actions">
-                <button class="btn-icon" onclick="openCloseModal(${t.id})" title="بستن"><i class="fas fa-check-circle"></i></button>
-            </div>
-        </div>`;
-    });
-    list.innerHTML = html;
-}
-
+// ===== Initialize =====
 async function initialize() {
     try {
         await db.open();
-        const migDone = await db.getSetting('migV4');
-        if (!migDone) { await db.upgradeOldTrades(); await db.saveSetting('migV4', '1'); }
-        await loadAccountsFromDB();
-        await loadTradesFromDB();
-        updateBalanceDisplay();
-        updateTotalRisk();
-        updateStats();
-        updateDetailedStats();
-        setInitialMonthBasedOnLastTrade();
-        updateMonthlyDashboard();
-        switchSection('trade-form');
-        loadOpenTrades();
-        setTimeout(() => { updateGrowthChart(); updateMonthlyGrowthChart(); }, 500);
-        try { customStrategies = JSON.parse((await db.getSetting('customStrategies')) || '[]'); } catch (e) { customStrategies = []; }
-        refreshStrategyList();
-        if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
-        checkStorage();
-        if (trades.length > 0) {
-            const last = parseInt(await db.getSetting('lastBackupAt')) || 0;
-            const days = last ? Math.floor((Date.now() - last) / 86400000) : null;
-            if (days === null || days >= 7) setTimeout(() => showNotification(days === null ? 'هنوز بکاپ نگرفته‌اید.' : `${days} روز از آخرین بکاپ گذشته است.`, 'warning'), 1500);
-        }
+        await loadSettings();
+        await loadAccounts();
+        await loadCategories();
+        await loadTransactionsFromDB();
+
+        // اگر حساب و دسته نداریم، پیش‌فرض بساز
+        if (accounts.length === 0) await createDefaultAccount();
+        if (categories.length === 0) await createDefaultCategories();
+
+        await refreshAllSelects();
+        updateDashboard();
+        updateAccountsCount();
+        setDefaultDate();
         console.log('✅ راه‌اندازی کامل شد');
     } catch (e) {
         console.error('❌ خطای راه‌اندازی:', e);
-        showNotification('خطا در راه‌اندازی دیتابیس', 'error');
+        showNotification('خطا در راه‌اندازی: ' + e.message, 'error');
     }
 }
 
-async function checkStorage() {
-    if (!navigator.storage || !navigator.storage.estimate) return;
-    try {
-        const { usage, quota } = await navigator.storage.estimate();
-        if (!quota) return;
-        const ratio = usage / quota;
-        if (ratio > 0.85) showNotification(`⚠️ ${(ratio*100).toFixed(0)}٪ فضا پر شده. بکاپ بگیرید.`, 'error');
-        else if (ratio > 0.7) showNotification(`فضا: ${(ratio*100).toFixed(0)}٪ پر شده.`, 'warning');
-    } catch (e) {}
+async function loadSettings() {
+    const c = await db.getSetting('currency');
+    if (c) currency = c;
 }
 
-function setInitialMonthBasedOnLastTrade() {
-    if (trades.length > 0) {
-        const sorted = [...trades].sort((a, b) => new Date(b.date) - new Date(a.date));
-        const pd = getPersianDateParts(sorted[0].date);
-        if (pd) { currentYear = pd.year; currentMonth = pd.month; return; }
-    }
-    const now = getPersianDateParts(new Date());
-    currentYear = now.year;
-    currentMonth = now.month;
+async function loadAccounts() {
+    accounts = await db.getAccounts();
 }
 
-async function loadAccountsFromDB() {
-    try {
-        const dbAcc = await db.getAccounts();
-        if (dbAcc && dbAcc.length > 0) accounts = dbAcc;
-        else { accounts = [{ id: 1, name: 'حساب اصلی', balance: 0, vipLevel: 'vip0' }]; await db.saveAccounts(accounts); }
-        const savedId = await db.getSetting('activeAccountId');
-        activeAccountId = savedId ? parseInt(savedId) : 1;
-        activeAccount = accounts.find(a => a.id === activeAccountId) || accounts[0];
-        accountBalance = activeAccount ? activeAccount.balance : 0;
-        initialAccountBalance = accountBalance;
-        updateAccountsList();
-        syncAutoFee();
-    } catch (e) {
-        console.error(e);
-        accounts = [{ id: 1, name: 'حساب اصلی', balance: 0 }];
-        activeAccountId = 1;
-        activeAccount = accounts[0];
-        accountBalance = 0;
-        initialAccountBalance = 0;
-        updateAccountsList();
-    }
+async function loadCategories() {
+    categories = await db.getCategories();
 }
 
-async function loadTradesFromDB() {
-    try {
-        trades = await db.getTradesByAccount(activeAccountId);
-        loadTrades();
-        loadOpenTrades();
-    } catch (e) {
-        console.error(e);
-        trades = [];
-        loadTrades();
-        loadOpenTrades();
-    }
+async function loadTransactionsFromDB() {
+    transactions = await db.getAllTransactions();
 }
 
-async function saveTradeToDB(trade) {
-    try {
-        await db.saveTrade(trade);
-        trades = await db.getTradesByAccount(activeAccountId);
-        return true;
-    } catch (e) {
-        if (e.message.includes('فضای')) showNotification(e.message, 'error');
-        else { console.error(e); showNotification('خطا در ذخیره معامله', 'error'); }
-        return false;
-    }
+async function createDefaultAccount() {
+    const acc = {
+        id: generateId(),
+        name: 'نقدی',
+        type: 'cash',
+        initialBalance: 0,
+        isActive: true,
+        createdAt: new Date().toISOString()
+    };
+    accounts = [acc];
+    await db.saveAccounts(accounts);
+    console.log('✅ حساب پیش‌فرض ساخته شد');
 }
 
-async function deleteTradeFromDB(tradeId) {
-    try { await db.deleteTrade(tradeId); trades = await db.getTradesByAccount(activeAccountId); return true; }
-    catch (e) { console.error(e); return false; }
-}
-
-async function saveAccountsToDB() {
-    try { await db.saveAccounts(accounts); await db.saveSetting('activeAccountId', activeAccountId.toString()); return true; }
-    catch (e) { console.error(e); return false; }
-}
-
-function openImageModal(src) {
-    if (src) {
-        document.getElementById('fullSizeImage').src = src;
-        document.getElementById('imageModal').style.display = 'flex';
-        document.body.style.overflow = 'hidden';
-    }
-}
-function closeImageModal() {
-    document.getElementById('imageModal').style.display = 'none';
-    document.body.style.overflow = 'auto';
-}
-
-let activeModal = null;
-function toggleModal(modalId) {
-    const modal = document.getElementById(modalId);
-    if (!modal) return;
-    const btn = document.getElementById(modalId.replace('Modal', 'Btn'));
-    if (activeModal && activeModal !== modal) {
-        activeModal.classList.remove('active');
-        const ab = document.getElementById(activeModal.id.replace('Modal', 'Btn'));
-        if (ab) ab.classList.remove('active');
-    }
-    if (modal.classList.contains('active')) {
-        modal.classList.remove('active');
-        if (btn) btn.classList.remove('active');
-        activeModal = null;
-    } else {
-        modal.classList.add('active');
-        if (btn) btn.classList.add('active');
-        activeModal = modal;
-        if (modalId === 'balanceModal') { const i = document.getElementById('newBalanceInput'); if (i) i.value = initialAccountBalance; }
-        if (modalId === 'accountModal') updateAccountsList();
-    }
-}
-function closeAllModals() {
-    document.querySelectorAll('.modal-box').forEach(m => m.classList.remove('active'));
-    document.querySelectorAll('.balance-btn').forEach(b => b.classList.remove('active'));
-    activeModal = null;
-}
-
-function previewEntryScreenshot(input) {
-    if (input.files && input.files[0]) {
-        const r = new FileReader();
-        r.onload = e => {
-            const preview = document.getElementById('entryScreenshotPreview');
-            compressImage(e.target.result, data => {
-                preview.src = data;
-                document.getElementById('entryScreenshotPreviewContainer').classList.add('active');
+async function createDefaultCategories() {
+    const all = [];
+    for (const [type, list] of Object.entries(DEFAULT_CATEGORIES)) {
+        for (const c of list) {
+            all.push({
+                id: generateId(),
+                name: c.name,
+                type,
+                icon: c.icon,
+                isPreset: true
             });
-        };
-        r.readAsDataURL(input.files[0]);
+        }
     }
+    categories = all;
+    await db.saveCategories(categories);
+    console.log('✅ دسته‌های پیش‌فرض ساخته شد');
 }
-function previewCloseScreenshot(input) {
-    if (input.files && input.files[0]) {
-        const r = new FileReader();
-        r.onload = e => {
-            const preview = document.getElementById('closeScreenshotPreview');
-            compressImage(e.target.result, data => {
-                preview.src = data;
-                preview.classList.add('active');
-                document.getElementById('closeScreenshotRemove').style.display = 'inline';
-                closeScreenshotData = data;
-            });
-        };
-        r.readAsDataURL(input.files[0]);
+
+async function refreshAllSelects() {
+    refreshAccountSelects();
+    refreshCategorySelect();
+    refreshHistoryFilters();
+}
+
+function refreshAccountSelects() {
+    const fromSel = document.getElementById('accountId');
+    const toSel = document.getElementById('toAccountId');
+    const histAcc = document.getElementById('histAccount');
+
+    const opts = accounts.map(a => `<option value="${a.id}">${escapeHTML(a.name)}</option>`).join('');
+    if (fromSel) fromSel.innerHTML = opts || '<option value="">حسابی موجود نیست</option>';
+    if (toSel) toSel.innerHTML = opts || '<option value="">حسابی موجود نیست</option>';
+    if (histAcc) histAcc.innerHTML = '<option value="all">همه حساب‌ها</option>' + opts;
+}
+
+function refreshCategorySelect() {
+    const sel = document.getElementById('categoryId');
+    if (!sel) return;
+    const filtered = categories.filter(c => c.type === currentType || currentType === 'transfer');
+    if (currentType === 'transfer') {
+        sel.innerHTML = '<option value="">بدون دسته</option>';
+        return;
     }
-}
-function removeEntryScreenshot() {
-    const f = document.getElementById('entryScreenshotFile'); if (f) f.value = '';
-    const p = document.getElementById('entryScreenshotPreview'); if (p) p.src = '';
-    const c = document.getElementById('entryScreenshotPreviewContainer'); if (c) c.classList.remove('active');
-}
-function removeCloseScreenshot() {
-    const f = document.getElementById('closeScreenshotFile'); if (f) f.value = '';
-    const p = document.getElementById('closeScreenshotPreview'); if (p) p.classList.remove('active');
-    const r = document.getElementById('closeScreenshotRemove'); if (r) r.style.display = 'none';
-    closeScreenshotData = null;
+    sel.innerHTML = '<option value="">انتخاب دسته...</option>' + filtered.map(c => `<option value="${c.id}">${escapeHTML(c.name)}</option>`).join('');
 }
 
-function setBalancePreset(amount) { document.getElementById('newBalanceInput').value = amount; }
-
-function updateBalanceDisplay() {
-    const eq = getEquity();
-    const el = id => document.getElementById(id);
-    if (el('currentBalance')) el('currentBalance').textContent = '$' + formatNumber(Math.round(eq * 100) / 100);
-    if (el('currentBalanceDisplay')) el('currentBalanceDisplay').textContent = '$' + formatNumber(accountBalance);
-    if (el('currentAccountName')) el('currentAccountName').textContent = activeAccount ? activeAccount.name : 'حساب اصلی';
-    if (el('activeAccountIndicator')) el('activeAccountIndicator').textContent = `${accounts.findIndex(a => a.id === activeAccountId) + 1}/${accounts.length}`;
-    const pnl = calculateTotalPnL();
-    const tpnl = el('totalPnL');
-    if (tpnl) { tpnl.textContent = (pnl >= 0 ? '+' : '') + formatCurrency(Math.abs(pnl)); tpnl.style.color = pnl >= 0 ? '#10b981' : '#ef4444'; }
+function refreshHistoryFilters() {
+    const sel = document.getElementById('histCategory');
+    if (!sel) return;
+    const opts = categories.map(c => `<option value="${c.id}">${escapeHTML(c.name)}</option>`).join('');
+    sel.innerHTML = '<option value="all">همه دسته‌ها</option>' + opts;
 }
 
-function getEquity() { return (initialAccountBalance || 0) + calculateTotalPnL(); }
-
-function formatCurrency(num) {
-    return '$' + parseFloat(num || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-function formatNumber(num) {
-    const n = parseFloat(num);
-    if (isNaN(n)) return '0';
-    if (n % 1 !== 0) return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 8 });
-    return n.toLocaleString('en-US');
-}
-
-function updateTotalRisk() {
-    const totalRisk = trades.filter(t => t.status === 'open').reduce((s, t) => s + (t.totalRiskAmount || 0), 0);
-    const eq = getEquity();
-    const pct = eq > 0 ? (totalRisk / eq) * 100 : 0;
-    const el = document.getElementById('totalRiskPercent');
-    if (el) el.textContent = pct.toFixed(2) + '%';
-}
-
-function setRiskPercent(percent) {
-    document.getElementById('riskPercent').value = percent;
-    calculateRisk();
-}
-
-async function updateBalance() {
-    const input = document.getElementById('newBalanceInput');
-    const nb = toNumber(input.value);
-    if (nb <= 0) { showNotification('لطفاً یک عدد معتبر وارد کنید.', 'error'); return; }
-    const rounded = Math.round(nb * 100) / 100;
-    const idx = accounts.findIndex(a => a.id === activeAccountId);
-    if (idx !== -1) {
-        accounts[idx].balance = rounded;
-        activeAccount = accounts[idx];
-        accountBalance = rounded;
-        initialAccountBalance = rounded;
-        await saveAccountsToDB();
-    }
-    updateBalanceDisplay();
-    updateTotalRisk();
-    updateStats();
-    updateDetailedStats();
-    updateGrowthChart();
-    updateMonthlyGrowthChart();
-    calculateRisk();
-    closeAllModals();
-    showNotification('بالانس به‌روزرسانی شد.', 'success');
-}
-
-function resetForm() {
-    editingTradeId = null;
-    editBaseBalance = null;
-    document.getElementById('tradeForm').reset();
-    document.getElementById('type').value = '';
-    const fd = document.getElementById('feeDetails'); if (fd) fd.style.display = 'none';
-    removeEntryScreenshot();
+function setDefaultDate() {
     const now = new Date();
     const off = now.getTimezoneOffset() * 60000;
-    document.getElementById('date').value = new Date(now - off).toISOString().slice(0, 16);
-    syncAutoFee();
+    const localISO = new Date(now - off).toISOString().slice(0, 16);
+    const dateEl = document.getElementById('date');
+    if (dateEl) dateEl.value = localISO;
 }
 
-function getAccountVip(account) { return normalizeVip(account && account.vipLevel); }
-
-function syncAutoFee() {
-    const input = document.getElementById('feePercent');
-    const text = document.getElementById('feeAutoText');
-    if (!input) return;
-    if (editingTradeId !== null) { if (text) text.textContent = 'کارمزد ثبت‌شده حفظ می‌شود'; return; }
-    const vip = getAccountVip(activeAccount);
-    input.value = String(getTotalFeePercent(vip));
-    if (text) {
-        const e = (getFeeRate(vip, DEFAULT_ENTRY_ORDER) * 100).toFixed(3);
-        const x = (getFeeRate(vip, DEFAULT_EXIT_ORDER) * 100).toFixed(3);
-        text.textContent = `${vipLabel(vip)} · ورود ${e}٪ + خروج ${x}٪`;
-    }
+// ===== نوع تراکنش =====
+function selectType(type) {
+    currentType = type;
+    document.getElementById('type').value = type;
+    document.querySelectorAll('.type-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.type === type);
+    });
+    document.getElementById('toAccountGroup').style.display = type === 'transfer' ? '' : 'none';
+    document.getElementById('categoryGroup').style.display = type === 'transfer' ? 'none' : '';
+    refreshCategorySelect();
 }
 
-async function setAccountVip(accountId, vipLevel) {
-    const acc = accounts.find(a => a.id === accountId);
-    if (!acc) return;
-    acc.vipLevel = normalizeVip(vipLevel);
-    if (activeAccount && activeAccount.id === acc.id) activeAccount = acc;
-    await saveAccountsToDB();
-    updateAccountsList();
-    syncAutoFee();
-    calculateRisk();
-    showNotification(`سطح ${vipLabel(acc.vipLevel)} برای «${acc.name}» ثبت شد.`, 'success');
+// ===== پیوست =====
+function previewAttachment(input) {
+    if (!input.files || !input.files[0]) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        compressImage(e.target.result, (data) => {
+            currentAttachmentData = data;
+            const preview = document.getElementById('attachmentPreview');
+            preview.src = data;
+            document.getElementById('attachmentPreviewContainer').classList.add('active');
+        });
+    };
+    reader.readAsDataURL(input.files[0]);
 }
 
-// ✅ استفاده از toNumber برای اعداد فارسی/کاما
-function calculateRisk() {
-    syncAutoFee();
-    const v = id => (document.getElementById(id) || {}).value || '';
-    const entryPriceStr = String(v('entryPrice')).trim();
-    const stopLossStr = String(v('stopLoss')).trim();
-    const takeProfitStr = String(v('takeProfit')).trim();
-    const riskPercentStr = String(v('riskPercent')).trim();
-    const feePercentStr = String(v('feePercent')).trim();
-    const type = v('type');
+function removeAttachment() {
+    const f = document.getElementById('attachmentFile');
+    if (f) f.value = '';
+    const p = document.getElementById('attachmentPreview');
+    if (p) p.src = '';
+    const c = document.getElementById('attachmentPreviewContainer');
+    if (c) c.classList.remove('active');
+    currentAttachmentData = null;
+}
 
-    const entryPrice = toNumber(entryPriceStr);
-    const stopLoss = toNumber(stopLossStr);
-    const takeProfit = toNumber(takeProfitStr);
-    const riskPercent = toNumber(riskPercentStr);
-    const feePct = toNumber(feePercentStr);
+function compressImage(dataUrl, cb) {
+    const img = new Image();
+    img.onload = () => {
+        const max = 1200;
+        const s = Math.min(1, max / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * s);
+        canvas.height = Math.round(img.height * s);
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        cb(canvas.toDataURL('image/jpeg', 0.78));
+    };
+    img.onerror = () => cb(dataUrl);
+    img.src = dataUrl;
+}
 
-    const setTxt = (id, val) => { const e = document.getElementById(id); if (e) e.textContent = val; };
+// ===== فرم ثبت =====
+document.getElementById('transactionForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
 
-    if (entryPrice <= 0 || stopLoss <= 0 || takeProfit <= 0 || riskPercent <= 0 || !type) {
-        const fd = document.getElementById('feeDetails'); if (fd) fd.style.display = 'none';
-        setTxt('riskAmount', '$0'); setTxt('potentialProfit', '$0'); setTxt('riskRewardRatio', '1:0');
+    const amountStr = document.getElementById('amount').value.trim();
+    const amount = toNumber(amountStr);
+    if (amount <= 0) {
+        showNotification('مبلغ معتبر وارد کنید.', 'error');
         return;
     }
 
-    const base = (editingTradeId !== null && editBaseBalance != null && editBaseBalance > 0) ? editBaseBalance : getEquity();
-    const totalRisk = (base * riskPercent) / 100;
-
-    let slPts, tpPts;
-    if (type === 'buy') { slPts = Math.abs(entryPrice - stopLoss); tpPts = Math.abs(takeProfit - entryPrice); }
-    else { slPts = Math.abs(stopLoss - entryPrice); tpPts = Math.abs(entryPrice - takeProfit); }
-    if (slPts <= 0) { const fd = document.getElementById('feeDetails'); if (fd) fd.style.display = 'none'; return; }
-
-    const feePerUnit = (entryPrice * feePct) / 100;
-    const denom = slPts + feePerUnit;
-    const posSize = denom > 0 ? totalRisk / denom : 0;
-    const posValue = posSize * entryPrice;
-    const totalFee = (posValue * feePct) / 100;
-    const feeEntry = totalFee / 2;
-    const feeExit = totalFee / 2;
-    const potentialProfit = posSize * tpPts;
-    const netProfit = potentialProfit - totalFee;
-    const rr = slPts > 0 ? (tpPts / slPts).toFixed(2) : 0;
-
-    setTxt('riskAmount', formatCurrency(totalRisk));
-    setTxt('potentialProfit', formatCurrency(potentialProfit));
-    const netRR = totalRisk > 0 ? ((potentialProfit - totalFee) / totalRisk).toFixed(2) : '0';
-    setTxt('riskRewardRatio', '1:' + rr + ' (خالص 1:' + netRR + ')');
-    setTxt('feeEntryAmount', formatCurrency(feeEntry));
-    setTxt('feeExitAmount', formatCurrency(feeExit));
-    setTxt('totalFeeAmount', formatCurrency(totalFee));
-    setTxt('grossLossAmount', formatCurrency(posSize * slPts));
-    setTxt('totalLossAmount', formatCurrency(posSize * slPts + totalFee));
-    setTxt('netProfitAmount', formatCurrency(netProfit));
-    const fd = document.getElementById('feeDetails'); if (fd) fd.style.display = 'block';
-
-    return { totalRisk, positionSize: posSize, positionValue: posValue, potentialProfit, netProfit, riskRewardRatio: rr, feeEntry, feeExit, totalFee };
-}
-
-document.getElementById('tradeForm').addEventListener('submit', async function(e) {
-    e.preventDefault();
-    syncAutoFee();
-
-    const v = id => document.getElementById(id).value.trim();
-    const entryPriceStr = v('entryPrice');
-    const stopLossStr = v('stopLoss');
-    const takeProfitStr = v('takeProfit');
-    const riskPercentStr = v('riskPercent');
-    const feePercentStr = v('feePercent');
-
-    const entryPrice = toNumber(entryPriceStr);
-    const stopLoss = toNumber(stopLossStr);
-    const takeProfit = toNumber(takeProfitStr);
-    const riskPercent = toNumber(riskPercentStr);
-    const feePct = toNumber(feePercentStr);
-
-    if (entryPrice <= 0 || stopLoss <= 0 || takeProfit <= 0 || riskPercent <= 0) {
-        showNotification('همه فیلدهای ضروری را پر کنید.', 'error'); return;
+    const date = document.getElementById('date').value;
+    if (!date) {
+        showNotification('تاریخ را وارد کنید.', 'error');
+        return;
     }
+
+    const accountId = document.getElementById('accountId').value;
+    if (!accountId) {
+        showNotification('حساب را انتخاب کنید.', 'error');
+        return;
+    }
+
     const type = document.getElementById('type').value;
-    if (!type) { showNotification('نوع معامله را انتخاب کنید.', 'error'); return; }
-    if (type === 'buy' && stopLoss >= entryPrice) { showNotification('حد ضرر باید کمتر از ورود باشد.', 'error'); return; }
-    if (type === 'sell' && stopLoss <= entryPrice) { showNotification('حد ضرر باید بیشتر از ورود باشد.', 'error'); return; }
-    if (type === 'buy' && takeProfit <= entryPrice) { showNotification('حد سود باید بیشتر از ورود باشد.', 'error'); return; }
-    if (type === 'sell' && takeProfit >= entryPrice) { showNotification('حد سود باید کمتر از ورود باشد.', 'error'); return; }
+    let categoryId = document.getElementById('categoryId').value || null;
+    let toAccountId = null;
 
-    const riskData = calculateRisk();
-    if (!riskData) { showNotification('خطا در محاسبات ریسک.', 'error'); return; }
-
-    const tradeUID = generateUID();
-    const preview = document.getElementById('entryScreenshotPreview');
-    let entryScreenshot = null, entryScreenshotName = null;
-    if (preview.getAttribute('src') && preview.src.startsWith('data:image')) {
-        entryScreenshot = preview.src;
-        entryScreenshotName = `entry_${tradeUID}.png`;
+    if (type === 'transfer') {
+        toAccountId = document.getElementById('toAccountId').value;
+        if (!toAccountId) {
+            showNotification('حساب مقصد را انتخاب کنید.', 'error');
+            return;
+        }
+        if (parseInt(toAccountId) === parseInt(accountId)) {
+            showNotification('حساب مبدأ و مقصد نمی‌توانند یکی باشند.', 'error');
+            return;
+        }
+        categoryId = null;
     }
 
-    const baseBalanceAtEntry = (editingTradeId !== null && editBaseBalance != null && editBaseBalance > 0) ? editBaseBalance : getEquity();
-
-    const trade = {
-        id: generateTradeId(),
-        uid: tradeUID,
-        symbol: document.getElementById('symbol').value.toUpperCase(),
-        date: document.getElementById('date').value,
+    const tx = {
+        id: editingTransactionId != null ? editingTransactionId : generateId(),
+        uid: editingTransactionId != null ? (await db.getTransactionById(editingTransactionId))?.uid : generateUID(),
         type,
-        entryPrice, entryPriceStr,
-        stopLoss, stopLossStr,
-        takeProfit, takeProfitStr,
-        riskPercent,
-        totalFeePercent: feePct,
-        feeEntry: riskData.feeEntry,
-        feeExit: riskData.feeExit,
-        totalFee: riskData.totalFee,
-        baseBalanceAtEntry,
-        status: 'open',
-        closedPrice: null,
-        closedDate: null,
-        entryScreenshot, entryScreenshotName,
-        exitScreenshot: null, exitScreenshotName: null,
-        totalRiskAmount: riskData.totalRisk,
-        positionSize: riskData.positionSize,
-        positionValue: riskData.positionValue,
-        potentialProfit: riskData.potentialProfit,
-        netProfit: riskData.netProfit,
-        riskRewardRatio: riskData.riskRewardRatio,
-        strategy: document.getElementById('strategy').value.trim(),
+        amount,
+        currency,
+        date,
+        accountId: parseInt(accountId),
+        toAccountId: toAccountId ? parseInt(toAccountId) : null,
+        categoryId: categoryId ? parseInt(categoryId) : null,
+        description: document.getElementById('description').value.trim(),
         notes: document.getElementById('notes').value.trim(),
-        accountId: activeAccountId
+        attachment: currentAttachmentData,
+        attachmentName: currentAttachmentData ? `receipt_${Date.now()}.jpg` : null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
     };
 
-    const isEditing = editingTradeId !== null;
-    let exitFollowed = false;
-    if (isEditing) {
-        const orig = await db.getTradeById(editingTradeId);
+    // اگر ویرایش است، createdAt قبلی را حفظ کن
+    if (editingTransactionId != null) {
+        const orig = await db.getTransactionById(editingTransactionId);
         if (orig) {
-            trade.id = orig.id;
-            trade.uid = orig.uid;
-            trade.status = orig.status;
-            trade.closedPrice = orig.closedPrice;
-            if (orig.status === 'closed') {
-                const cp = Number(orig.closedPrice);
-                const same = (x, y) => Math.abs(x - y) <= 1e-9 * Math.max(1, Math.abs(y));
-                if (same(cp, orig.takeProfit) && !same(trade.takeProfit, orig.takeProfit)) { trade.closedPrice = trade.takeProfit; exitFollowed = true; }
-                else if (same(cp, orig.stopLoss) && !same(trade.stopLoss, orig.stopLoss)) { trade.closedPrice = trade.stopLoss; exitFollowed = true; }
+            tx.createdAt = orig.createdAt;
+            if (!tx.attachment) {
+                tx.attachment = orig.attachment;
+                tx.attachmentName = orig.attachmentName;
             }
-            if (orig.actualFee != null) { trade.actualFee = orig.actualFee; trade.totalFee = orig.actualFee; trade.feeEntry = orig.actualFee / 2; trade.feeExit = orig.actualFee / 2; }
-            trade.closedDate = orig.closedDate;
-            trade.exitScreenshot = orig.exitScreenshot;
-            trade.exitScreenshotName = orig.exitScreenshotName;
-            trade.accountId = orig.accountId;
-            if (orig.baseBalanceAtEntry != null) trade.baseBalanceAtEntry = orig.baseBalanceAtEntry;
-            if (!trade.entryScreenshot) { trade.entryScreenshot = orig.entryScreenshot; trade.entryScreenshotName = orig.entryScreenshotName; }
-            else { trade.entryScreenshotName = `entry_${orig.uid}.png`; }
         }
     }
 
-    const saved = await saveTradeToDB(trade);
-    if (!saved) return;
-    editingTradeId = null;
-    editBaseBalance = null;
+    try {
+        await db.saveTransaction(tx);
+        editingTransactionId = null;
+        currentAttachmentData = null;
 
-    loadTrades();
-    updateStats();
-    updateDetailedStats();
-    updateTotalRisk();
-    loadOpenTrades();
-    updateGrowthChart();
-    updateMonthlyGrowthChart();
-    setInitialMonthBasedOnLastTrade();
-    updateMonthlyDashboard();
+        await loadTransactionsFromDB();
+        await refreshAllSelects();
+        updateDashboard();
+        updateAccountsCount();
 
-    this.reset();
-    const now = new Date();
-    const off = now.getTimezoneOffset() * 60000;
-    document.getElementById('date').value = new Date(now - off).toISOString().slice(0, 16);
-    document.getElementById('type').value = '';
-    document.getElementById('feeDetails').style.display = 'none';
-    syncAutoFee();
-    removeEntryScreenshot();
+        this.reset();
+        document.getElementById('type').value = 'expense';
+        currentType = 'expense';
+        document.querySelectorAll('.type-btn').forEach(b => b.classList.toggle('active', b.dataset.type === 'expense'));
+        document.getElementById('toAccountGroup').style.display = 'none';
+        document.getElementById('categoryGroup').style.display = '';
+        refreshCategorySelect();
+        removeAttachment();
+        setDefaultDate();
 
-    showNotification(isEditing ? (exitFollowed ? 'ذخیره شد؛ قیمت خروج با حد جدید به‌روز شد.' : 'ویرایش ذخیره شد.') : 'معامله ثبت شد!', 'success');
-    checkStorage();
+        showNotification('✅ تراکنش ثبت شد', 'success');
+        await checkStorage();
+
+        setTimeout(() => switchSection('dashboard'), 800);
+    } catch (err) {
+        console.error(err);
+        showNotification('خطا در ذخیره: ' + err.message, 'error');
+    }
 });
 
-function loadTrades() {
-    const tbody = document.getElementById('tradesTableBody');
-    const noMsg = document.getElementById('noTradesMessage');
+document.getElementById('transactionForm').addEventListener('reset', () => {
+    editingTransactionId = null;
+    currentAttachmentData = null;
+    setTimeout(() => {
+        removeAttachment();
+        selectType('expense');
+    }, 0);
+});
+
+// ===== داشبورد =====
+function updateDashboard() {
+    const totalBalance = accounts.reduce((sum, acc) => sum + getAccountBalance(acc.id), 0);
+    document.getElementById('totalBalance').textContent = formatCurrency(totalBalance);
+
+    const now = new Date();
+    const pd = getPersianDateParts(now);
+    const monthly = transactions.filter(t => {
+        const d = getPersianDateParts(t.date);
+        return d && d.year === pd.year && d.month === pd.month;
+    });
+
+    const income = monthly.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
+    const expense = monthly.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+    const investment = monthly.filter(t => t.type === 'investment').reduce((s, t) => s + t.amount, 0);
+    const netSaving = income - expense - investment;
+
+    document.getElementById('monthlyIncome').textContent = formatMoney(income);
+    document.getElementById('monthlyExpense').textContent = formatMoney(expense);
+    document.getElementById('monthlyInvestment').textContent = formatMoney(investment);
+    const netEl = document.getElementById('monthlyNetSaving');
+    netEl.textContent = (netSaving >= 0 ? '+' : '') + formatMoney(Math.abs(netSaving));
+    netEl.className = 'stat-value ' + (netSaving >= 0 ? 'positive' : 'negative');
+
+    updateTrendChart();
+    renderTopExpenseCategories(monthly);
+}
+
+function getAccountBalance(accountId) {
+    const acc = accounts.find(a => a.id === accountId);
+    if (!acc) return 0;
+    let balance = acc.initialBalance || 0;
+    for (const t of transactions) {
+        if (t.type === 'income' && t.accountId === accountId) balance += t.amount;
+        else if (t.type === 'expense' && t.accountId === accountId) balance -= t.amount;
+        else if (t.type === 'investment' && t.accountId === accountId) balance -= t.amount;
+        else if (t.type === 'transfer') {
+            if (t.accountId === accountId) balance -= t.amount;
+            if (t.toAccountId === accountId) balance += t.amount;
+        }
+    }
+    return balance;
+}
+
+function updateTrendChart() {
+    const canvas = document.getElementById('trendChart');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+
+    const now = new Date();
+    const months = [];
+    for (let i = 5; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const pd = getPersianDateParts(d);
+        months.push(pd);
+    }
+
+    const incomeData = [];
+    const expenseData = [];
+
+    for (const m of months) {
+        const mTx = transactions.filter(t => {
+            const d = getPersianDateParts(t.date);
+            return d && d.year === m.year && d.month === m.month;
+        });
+        incomeData.push(mTx.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0));
+        expenseData.push(mTx.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0));
+    }
+
+    const monthNames = ['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند'];
+    const labels = months.map(m => monthNames[m.month - 1]);
+
+    if (trendChart) trendChart.destroy();
+    trendChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [
+                { label: 'درآمد', data: incomeData, borderColor: '#34d399', backgroundColor: 'rgba(52,211,153,0.1)', borderWidth: 3, tension: 0.3, fill: true },
+                { label: 'هزینه', data: expenseData, borderColor: '#fb7185', backgroundColor: 'rgba(251,113,133,0.1)', borderWidth: 3, tension: 0.3, fill: true }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { labels: { color: '#e8edf6', font: { family: 'Vazirmatn' } } },
+                tooltip: { backgroundColor: '#17223a', titleColor: '#f1f5f9', bodyColor: '#94a3b8', borderColor: '#243049', borderWidth: 1 }
+            },
+            scales: {
+                x: { grid: { color: 'rgba(71,85,105,0.2)' }, ticks: { color: '#8c9bb5', font: { family: 'Vazirmatn' } } },
+                y: { grid: { color: 'rgba(71,85,105,0.2)' }, ticks: { color: '#8c9bb5', font: { family: 'Vazirmatn' } } }
+            }
+        }
+    });
+}
+
+function renderTopExpenseCategories(monthlyTxs) {
+    const el = document.getElementById('topExpenseCategories');
+    if (!el) return;
+    const expenses = monthlyTxs.filter(t => t.type === 'expense' && t.categoryId);
+    const byCat = {};
+    for (const t of expenses) {
+        const cat = categories.find(c => c.id === t.categoryId);
+        const key = cat ? cat.name : 'نامشخص';
+        byCat[key] = (byCat[key] || 0) + t.amount;
+    }
+    const sorted = Object.entries(byCat).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    if (sorted.length === 0) {
+        el.innerHTML = '<p style="color:var(--muted);text-align:center;padding:20px;">هزینه‌ای در این ماه ثبت نشده</p>';
+        return;
+    }
+    const max = sorted[0][1];
+    el.innerHTML = sorted.map(([name, amount]) => {
+        const pct = (amount / max) * 100;
+        return `<div class="top-list-item">
+            <div class="top-list-name">
+                <strong>${escapeHTML(name)}</strong>
+                <div class="top-list-bar" style="width:${pct}%"></div>
+            </div>
+            <div class="top-list-amount">${formatMoney(amount)}</div>
+        </div>`;
+    }).join('');
+}
+
+function updateAccountsCount() {
+    const active = accounts.filter(a => a.isActive !== false).length;
+    const el = document.getElementById('activeAccountCount');
+    if (el) el.textContent = active + ' حساب فعال';
+}
+
+// ===== تاریخچه =====
+function loadTransactions() {
+    const tbody = document.getElementById('transactionsTableBody');
+    const noMsg = document.getElementById('noTransactionsMessage');
     if (!tbody) return;
-    const all = trades.filter(t => t.accountId === activeAccountId);
-    const filtered = applyHistoryFilters(all);
+
+    const filtered = applyHistoryFilters();
     const countEl = document.getElementById('histCount');
-    if (countEl) countEl.textContent = filtered.length === all.length ? `${all.length} معامله` : `${filtered.length} از ${all.length} معامله`;
+    if (countEl) countEl.textContent = `${filtered.length} از ${transactions.length} تراکنش`;
 
     if (filtered.length === 0) {
         tbody.innerHTML = '';
@@ -975,100 +800,90 @@ function loadTrades() {
     if (noMsg) noMsg.style.display = 'none';
 
     const sorted = [...filtered].sort((a, b) => new Date(b.date) - new Date(a.date));
-    let html = '';
-    sorted.forEach(t => {
-        const pnl = calculateTradePnL(t);
-        const pnlCls = pnl > 0 ? 'profit' : (pnl < 0 ? 'loss' : 'neutral');
-        const pnlTxt = t.status === 'closed' ? (pnl >= 0 ? '+' : '−') + formatCurrency(Math.abs(pnl)) : 'باز';
-        const typeText = t.type === 'buy' ? 'لانگ' : 'شورت';
-        const statusText = t.status === 'open' ? 'باز' : 'بسته';
-        const statusCls = t.status === 'open' ? 'chip chip-open' : 'chip chip-closed';
-        const rowCls = t.status === 'open' ? 'row-open' : (pnl > 0 ? 'row-win' : (pnl < 0 ? 'row-loss' : 'row-flat'));
-        const typeChip = `<span class="chip ${t.type === 'buy' ? 'chip-long' : 'chip-short'}">${typeText}</span>`;
-        const feeTxt = t.totalFeePercent > 0 ? `${t.totalFeePercent}%` : '-';
-        const dateText = formatPersianDate(t.date, true);
-        const cam = t.entryScreenshot ? '<i class="fas fa-camera" style="color:#3b82f6;margin-right:5px;" title="اسکرین‌شات"></i>' : '';
 
-        html += `<tr class="${rowCls}">
-            <td data-label="ارز"><div class="crypto-badge"><i class="fas fa-coins"></i>${escapeHTML(t.symbol)} ${cam}</div></td>
-            <td data-label="تاریخ">${dateText}</td>
-            <td data-label="نوع">${typeChip}</td>
-            <td class="price-display" data-label="ورود">${escapeHTML(t.entryPriceStr || t.entryPrice)}</td>
-            <td class="price-display" data-label="حد ضرر">${escapeHTML(t.stopLossStr || t.stopLoss)}</td>
-            <td class="price-display" data-label="حد سود">${escapeHTML(t.takeProfitStr || t.takeProfit)}</td>
-            <td data-label="ریسک">${(t.riskPercent || 0).toFixed(2)}%</td>
-            <td data-label="کارمزد">${feeTxt}</td>
-            <td data-label="وضعیت"><span class="${statusCls}">${statusText}</span></td>
-            <td data-label="سود/ضرر"><span class="${pnlCls}">${pnlTxt}</span></td>
+    tbody.innerHTML = sorted.map(t => {
+        const typeLabels = { income: 'درآمد', expense: 'هزینه', investment: 'سرمایه‌گذاری', transfer: 'انتقال' };
+        const typeCls = { income: 'chip-income', expense: 'chip-expense', investment: 'chip-investment', transfer: 'chip-transfer' };
+        const amountCls = { income: 'amount-income', expense: 'amount-expense', investment: 'amount-investment', transfer: 'amount-transfer' };
+        const rowCls = { income: 'row-income', expense: 'row-expense', investment: 'row-investment', transfer: 'row-transfer' };
+        const sign = (t.type === 'income') ? '+' : '−';
+
+        const cat = t.categoryId ? categories.find(c => c.id === t.categoryId) : null;
+        const acc = accounts.find(a => a.id === t.accountId);
+        const toAcc = t.toAccountId ? accounts.find(a => a.id === t.toAccountId) : null;
+
+        let accountLabel = acc ? escapeHTML(acc.name) : '-';
+        if (t.type === 'transfer' && toAcc) accountLabel = `${escapeHTML(acc?.name || '')} ← ${escapeHTML(toAcc.name)}`;
+
+        return `<tr class="${rowCls[t.type]}">
+            <td data-label="تاریخ">${toPersianDate(t.date)}</td>
+            <td data-label="نوع"><span class="chip ${typeCls[t.type]}">${typeLabels[t.type]}</span></td>
+            <td data-label="دسته">${cat ? escapeHTML(cat.name) : '-'}</td>
+            <td data-label="حساب">${accountLabel}</td>
+            <td data-label="مبلغ"><span class="amount-cell ${amountCls[t.type]}">${sign}${formatMoney(t.amount)}</span></td>
+            <td data-label="توضیح">${escapeHTML(t.description || '-')}</td>
             <td class="actions">
-                <button class="btn-icon" onclick="showTradeDetails(${t.id})" style="background-color:rgba(14,165,233,0.1);color:#0ea5e9;border:1px solid rgba(14,165,233,0.3);" title="جزئیات"><i class="fas fa-eye"></i></button>
-                <button class="btn-icon" onclick="editTrade(${t.id})" style="background-color:rgba(245,158,11,0.1);color:#f59e0b;border:1px solid rgba(245,158,11,0.3);" title="ویرایش"><i class="fas fa-edit"></i></button>
-                ${t.status === 'closed' ? `<button class="btn-icon" onclick="openCloseModal(${t.id})" style="background-color:rgba(16,185,129,0.1);color:#10b981;border:1px solid rgba(16,185,129,0.3);" title="ویرایش خروج"><i class="fas fa-flag-checkered"></i></button>` : ''}
-                <button class="btn-icon" onclick="deleteTrade(${t.id})" style="background-color:rgba(239,68,68,0.1);color:#ef4444;border:1px solid rgba(239,68,68,0.3);" title="حذف"><i class="fas fa-trash"></i></button>
+                <button class="btn-icon view" onclick="showDetails(${t.id})" title="جزئیات"><i class="fas fa-eye"></i></button>
+                <button class="btn-icon edit" onclick="editTransaction(${t.id})" title="ویرایش"><i class="fas fa-edit"></i></button>
+                <button class="btn-icon delete" onclick="deleteTransaction(${t.id})" title="حذف"><i class="fas fa-trash"></i></button>
             </td>
         </tr>`;
-    });
-    tbody.innerHTML = html;
+    }).join('');
 }
 
-async function showTradeDetails(tradeId) {
-    const t = trades.find(x => x.id === tradeId);
+function applyHistoryFilters() {
+    const q = (document.getElementById('histSearch')?.value || '').trim().toLowerCase();
+    const type = document.getElementById('histType')?.value || 'all';
+    const account = document.getElementById('histAccount')?.value || 'all';
+    const category = document.getElementById('histCategory')?.value || 'all';
+
+    return transactions.filter(t => {
+        if (q && !`${t.description} ${t.notes}`.toLowerCase().includes(q)) return false;
+        if (type !== 'all' && t.type !== type) return false;
+        if (account !== 'all' && t.accountId !== parseInt(account) && t.toAccountId !== parseInt(account)) return false;
+        if (category !== 'all' && t.categoryId !== parseInt(category)) return false;
+        return true;
+    });
+}
+
+// ===== جزئیات =====
+function showDetails(id) {
+    const t = transactions.find(x => x.id === id);
     if (!t) return;
-    const modal = document.getElementById('detailsModal');
-    const setTxt = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
 
-    setTxt('detail-symbol', t.symbol);
-    setTxt('detail-type', t.type === 'buy' ? 'لانگ' : 'شورت');
-    setTxt('detail-date', formatPersianDate(t.date, true));
-    const st = document.getElementById('detail-status');
-    if (st) { st.textContent = t.status === 'open' ? 'باز' : 'بسته'; st.className = 'detail-value ' + (t.status === 'open' ? 'profit' : 'neutral'); }
-    setTxt('detail-entry', t.entryPriceStr || t.entryPrice);
-    setTxt('detail-sl', t.stopLossStr || t.stopLoss);
-    setTxt('detail-tp', t.takeProfitStr || t.takeProfit);
-    setTxt('detail-risk-percent', (t.riskPercent || 0).toFixed(2) + '%');
-    setTxt('detail-risk-amount', formatCurrency(t.totalRiskAmount || 0));
-    setTxt('detail-position-size', formatNumber(t.positionSize || 0));
-    setTxt('detail-rr', '1:' + (t.riskRewardRatio || 0) + (t.netProfit != null && t.totalRiskAmount > 0 ? ' (خالص 1:' + (t.netProfit / t.totalRiskAmount).toFixed(2) + ')' : ''));
-    setTxt('detail-fee-entry', formatCurrency(t.feeEntry || 0));
-    setTxt('detail-fee-exit', formatCurrency(t.feeExit || 0));
-    setTxt('detail-total-fee', formatCurrency(t.totalFee || 0));
+    const typeLabels = { income: 'درآمد', expense: 'هزینه', investment: 'سرمایه‌گذاری', transfer: 'انتقال' };
+    document.getElementById('detail-type').textContent = typeLabels[t.type];
+    document.getElementById('detail-amount').textContent = formatMoney(t.amount) + ' ' + currency;
+    document.getElementById('detail-date').textContent = toPersianDate(t.date, true);
+    const acc = accounts.find(a => a.id === t.accountId);
+    document.getElementById('detail-account').textContent = acc ? acc.name : '-';
+    const cat = t.categoryId ? categories.find(c => c.id === t.categoryId) : null;
+    document.getElementById('detail-category').textContent = cat ? cat.name : '-';
 
-    const eImg = document.getElementById('detail-screenshot-entry');
-    const ePh = document.getElementById('detail-screenshot-entry-placeholder');
-    const xImg = document.getElementById('detail-screenshot-exit');
-    const xPh = document.getElementById('detail-screenshot-exit-placeholder');
-
-    if (t.entryScreenshot) { eImg.src = t.entryScreenshot; eImg.style.display = 'inline'; ePh.style.display = 'none'; }
-    else { eImg.style.display = 'none'; ePh.style.display = 'block'; }
-    if (t.exitScreenshot) { xImg.src = t.exitScreenshot; xImg.style.display = 'inline'; xPh.style.display = 'none'; }
-    else { xImg.style.display = 'none'; xPh.style.display = 'block'; }
-
-    const jr = document.getElementById('detail-journal-section');
-    const items = [['استراتژی', t.strategy], ['یادداشت', t.notes]].filter(i => i[1]);
-    jr.style.display = items.length ? 'block' : 'none';
-    jr.innerHTML = items.length ? '<div class="detail-section-title"><i class="fas fa-book"></i> ژورنال</div><div class="details-grid">' + items.map(([l, v]) => `<div class="detail-item"><span class="detail-label">${l}</span><div class="detail-value">${escapeHTML(v)}</div></div>`).join('') + '</div>' : '';
-
-    if (t.status === 'closed') {
-        document.getElementById('detail-closed-price-container').style.display = 'block';
-        document.getElementById('detail-result-section').style.display = 'block';
-        setTxt('detail-closed-price', t.closedPrice || '0');
-        const pnl = calculateTradePnL(t);
-        const pe = document.getElementById('detail-net-pnl');
-        pe.textContent = (pnl >= 0 ? '+' : '−') + formatCurrency(Math.abs(pnl));
-        pe.style.color = pnl >= 0 ? '#10b981' : '#ef4444';
-        const diff = t.type === 'buy' ? t.closedPrice - t.entryPrice : t.entryPrice - t.closedPrice;
-        const gross = t.positionSize * diff;
-        const gp = document.getElementById('detail-gross-pnl');
-        gp.textContent = (gross >= 0 ? '+' : '') + formatCurrency(Math.abs(gross));
-        gp.style.color = gross >= 0 ? '#10b981' : '#ef4444';
-        setTxt('detail-fee-deducted', formatCurrency(t.totalFee || 0));
-        if (t.closedDate) setTxt('detail-closed-date', formatPersianDate(t.closedDate, true));
+    const toWrap = document.getElementById('detail-to-account-wrap');
+    if (t.type === 'transfer' && t.toAccountId) {
+        const toAcc = accounts.find(a => a.id === t.toAccountId);
+        document.getElementById('detail-to-account').textContent = toAcc ? toAcc.name : '-';
+        toWrap.style.display = '';
     } else {
-        document.getElementById('detail-closed-price-container').style.display = 'none';
-        document.getElementById('detail-result-section').style.display = 'none';
+        toWrap.style.display = 'none';
     }
 
-    modal.style.display = 'flex';
+    const descSec = document.getElementById('detail-description-section');
+    if (t.description) { document.getElementById('detail-description').textContent = t.description; descSec.style.display = ''; }
+    else descSec.style.display = 'none';
+
+    const notesSec = document.getElementById('detail-notes-section');
+    if (t.notes) { document.getElementById('detail-notes').textContent = t.notes; notesSec.style.display = ''; }
+    else notesSec.style.display = 'none';
+
+    const attSec = document.getElementById('detail-attachment-section');
+    if (t.attachment) {
+        document.getElementById('detail-attachment').src = t.attachment;
+        attSec.style.display = '';
+    } else attSec.style.display = 'none';
+
+    document.getElementById('detailsModal').style.display = 'flex';
     document.body.style.overflow = 'hidden';
 }
 
@@ -1077,408 +892,326 @@ function closeDetailsModal() {
     document.body.style.overflow = 'auto';
 }
 
-function openCloseModal(tradeId) {
-    currentTradeIdForClose = tradeId;
-    const t = trades.find(x => x.id === tradeId);
-    document.getElementById('closePriceInput').value = t && t.status === 'closed' ? t.closedPrice : '';
-    document.getElementById('closeFeeInput').value = t && t.actualFee != null ? t.actualFee : '';
-    removeCloseScreenshot();
-    document.getElementById('closeTradeModal').style.display = 'flex';
+function openImageModal(src) {
+    if (!src) return;
+    document.getElementById('fullSizeImage').src = src;
+    document.getElementById('imageModal').style.display = 'flex';
     document.body.style.overflow = 'hidden';
 }
 
-function closeCloseModal() {
-    document.getElementById('closeTradeModal').style.display = 'none';
+function closeImageModal() {
+    document.getElementById('imageModal').style.display = 'none';
     document.body.style.overflow = 'auto';
-    currentTradeIdForClose = null;
-    closeScreenshotData = null;
 }
 
-async function confirmCloseTrade() {
-    const cpStr = document.getElementById('closePriceInput').value.trim();
-    const cp = toNumber(cpStr);
-    if (cp <= 0) { showNotification('قیمت معتبر وارد کنید.', 'error'); return; }
-    if (!currentTradeIdForClose) return;
-    const idx = trades.findIndex(t => t.id === currentTradeIdForClose);
-    if (idx === -1) return;
-    const t = trades[idx];
-    const wasOpen = t.status === 'open';
-
-    trades[idx].status = 'closed';
-    trades[idx].closedPrice = cp;
-    trades[idx].closedDate = (!wasOpen && t.closedDate) ? t.closedDate : new Date().toISOString();
-
-    const feeStr = document.getElementById('closeFeeInput').value.trim();
-    if (feeStr !== '') {
-        const f = toNumber(feeStr);
-        if (f >= 0) {
-            trades[idx].totalFee = f;
-            trades[idx].feeEntry = f / 2;
-            trades[idx].feeExit = f / 2;
-            trades[idx].actualFee = f;
-        }
-    }
-
-    if (closeScreenshotData) {
-        trades[idx].exitScreenshot = closeScreenshotData;
-        trades[idx].exitScreenshotName = `exit_${t.uid}.png`;
-    }
-
-    await saveTradeToDB(trades[idx]);
-    loadTrades();
-    updateStats();
-    updateDetailedStats();
-    updateTotalRisk();
-    updateMonthlyDashboard();
-    loadOpenTrades();
-    updateGrowthChart();
-    updateMonthlyGrowthChart();
-    closeCloseModal();
-
-    const diff = t.type === 'buy' ? cp - t.entryPrice : t.entryPrice - cp;
-    const pnl = diff * t.positionSize - (trades[idx].totalFee || 0);
-    showNotification(`بسته شد. ${pnl >= 0 ? 'سود' : 'ضرر'}: ${formatCurrency(Math.abs(pnl))}`, pnl >= 0 ? 'success' : 'warning');
-    checkStorage();
-}
-
-function calculateTradePnL(t) {
-    if (t.status !== 'closed' || !t.closedPrice) return 0;
-    const diff = t.type === 'buy' ? t.closedPrice - t.entryPrice : t.entryPrice - t.closedPrice;
-    return t.positionSize * diff - (t.totalFee || 0);
-}
-function calculateTotalPnL() { return trades.reduce((s, t) => s + calculateTradePnL(t), 0); }
-function calculateTotalProfit() { return trades.reduce((s, t) => { const p = calculateTradePnL(t); return s + (p > 0 ? p : 0); }, 0); }
-function calculateTotalLoss() { return trades.reduce((s, t) => { const p = calculateTradePnL(t); return s + (p < 0 ? Math.abs(p) : 0); }, 0); }
-function calculateTotalFees() { return trades.reduce((s, t) => s + (t.totalFee || 0), 0); }
-
-function updateStats() {
-    updateBalanceDisplay();
-    renderAdvancedStats();
-    refreshStrategyList();
-    if (trades.length === 0) { resetStats(); return; }
-    const closed = trades.filter(t => t.status === 'closed');
-    const open = trades.filter(t => t.status === 'open');
-    let profitable = 0, maxP = 0, maxL = 0;
-    closed.forEach(t => { const p = calculateTradePnL(t); if (p > 0) { profitable++; if (p > maxP) maxP = p; } else if (p < maxL) maxL = p; });
-    const winRate = closed.length > 0 ? (profitable / closed.length) * 100 : 0;
-    document.getElementById('totalTrades').textContent = trades.length;
-    document.getElementById('openTrades').textContent = open.length;
-    document.getElementById('totalProfit').textContent = formatCurrency(calculateTotalProfit());
-    document.getElementById('totalLoss').textContent = formatCurrency(calculateTotalLoss());
-    document.getElementById('totalFees').textContent = formatCurrency(calculateTotalFees());
-    document.getElementById('winRate').textContent = winRate.toFixed(1) + '%';
-    document.getElementById('maxProfit').textContent = '+' + formatCurrency(Math.abs(maxP));
-    document.getElementById('maxLoss').textContent = formatCurrency(Math.abs(maxL));
-}
-
-function resetStats() {
-    const setTxt = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
-    setTxt('totalTrades', '0'); setTxt('openTrades', '0');
-    setTxt('totalProfit', '$0.00'); setTxt('totalLoss', '$0.00'); setTxt('totalFees', '$0.00');
-    setTxt('winRate', '0%'); setTxt('maxProfit', '$0.00'); setTxt('maxLoss', '$0.00');
-}
-
-async function editTrade(id) {
-    const t = trades.find(x => x.id === id);
+// ===== ویرایش =====
+async function editTransaction(id) {
+    const t = await db.getTransactionById(id);
     if (!t) return;
-    document.getElementById('symbol').value = t.symbol;
-    document.getElementById('date').value = t.date;
-    document.getElementById('type').value = t.type;
-    document.getElementById('entryPrice').value = t.entryPriceStr || t.entryPrice;
-    document.getElementById('stopLoss').value = t.stopLossStr || t.stopLoss;
-    document.getElementById('takeProfit').value = t.takeProfitStr || t.takeProfit;
-    document.getElementById('riskPercent').value = t.riskPercent;
-    document.getElementById('feePercent').value = t.totalFeePercent ?? '';
-    refreshStrategyList(t.strategy || '');
+
+    editingTransactionId = id;
+    selectType(t.type);
+    document.getElementById('amount').value = t.amount;
+    document.getElementById('date').value = t.date.slice(0, 16);
+    document.getElementById('accountId').value = t.accountId;
+    if (t.toAccountId) document.getElementById('toAccountId').value = t.toAccountId;
+    if (t.categoryId) document.getElementById('categoryId').value = t.categoryId;
+    document.getElementById('description').value = t.description || '';
     document.getElementById('notes').value = t.notes || '';
-
-    if (t.baseBalanceAtEntry != null && t.baseBalanceAtEntry > 0) editBaseBalance = t.baseBalanceAtEntry;
-    else if (t.riskPercent > 0 && t.totalRiskAmount > 0) editBaseBalance = t.totalRiskAmount * 100 / t.riskPercent;
-    else editBaseBalance = null;
-    editingTradeId = id;
-
-    if (t.entryScreenshot) {
-        document.getElementById('entryScreenshotPreview').src = t.entryScreenshot;
-        document.getElementById('entryScreenshotPreviewContainer').classList.add('active');
+    if (t.attachment) {
+        currentAttachmentData = t.attachment;
+        document.getElementById('attachmentPreview').src = t.attachment;
+        document.getElementById('attachmentPreviewContainer').classList.add('active');
     } else {
-        removeEntryScreenshot();
+        removeAttachment();
     }
 
-    calculateRisk();
-    showNotification('در حال ویرایش. با ثبت، تغییرات ذخیره می‌شود.', 'info');
-    switchSection('trade-form');
-    loadOpenTrades();
+    switchSection('transaction-form');
+    showNotification('در حال ویرایش...', 'info');
 }
 
-async function deleteTrade(id) {
-    if (!confirm('از حذف این معامله اطمینان دارید؟')) return;
-    await deleteTradeFromDB(id);
-    loadTrades();
-    updateStats();
-    updateDetailedStats();
-    updateTotalRisk();
-    loadOpenTrades();
-    updateGrowthChart();
-    updateMonthlyGrowthChart();
-    setInitialMonthBasedOnLastTrade();
-    updateMonthlyDashboard();
-    showNotification('حذف شد.', 'warning');
+async function deleteTransaction(id) {
+    if (!confirm('از حذف این تراکنش اطمینان دارید؟')) return;
+    try {
+        await db.deleteTransaction(id);
+        await loadTransactionsFromDB();
+        loadTransactions();
+        updateDashboard();
+        updateAccountsCount();
+        showNotification('حذف شد', 'warning');
+    } catch (e) {
+        showNotification('خطا در حذف: ' + e.message, 'error');
+    }
 }
 
-function updateAccountsList() {
-    const c = document.getElementById('accountsListContainer');
-    if (!c) return;
-    if (!accounts || accounts.length === 0) { c.innerHTML = '<div class="account-item" style="justify-content:center;">حسابی وجود ندارد</div>'; return; }
-    c.innerHTML = accounts.map(a => {
-        const isActive = a.id === activeAccountId;
-        return `<div class="account-item ${isActive ? 'active-account' : ''}">
-            <div class="account-info">
-                <div class="account-name">${escapeHTML(a.name)}</div>
-                <div class="account-balance">${formatCurrency(a.balance)}</div>
-                ${isActive ? '<div class="active-badge">فعال</div>' : ''}
+// ===== تحلیل =====
+function updateAnalysis() {
+    const range = parseInt(document.getElementById('analysisRange')?.value || 6);
+    const now = new Date();
+    const months = [];
+    for (let i = range - 1; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        months.push(getPersianDateParts(d));
+    }
+
+    const incomeData = [];
+    const expenseData = [];
+    for (const m of months) {
+        const mTx = transactions.filter(t => {
+            const d = getPersianDateParts(t.date);
+            return d && d.year === m.year && d.month === m.month;
+        });
+        incomeData.push(mTx.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0));
+        expenseData.push(mTx.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0));
+    }
+
+    const monthNames = ['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند'];
+    const labels = months.map(m => monthNames[m.month - 1]);
+
+    // نمودار خطی
+    const lineCanvas = document.getElementById('incomeExpenseChart');
+    if (lineCanvas) {
+        const ctx = lineCanvas.getContext('2d');
+        if (incomeExpenseChart) incomeExpenseChart.destroy();
+        incomeExpenseChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [
+                    { label: 'درآمد', data: incomeData, backgroundColor: 'rgba(52,211,153,0.7)', borderColor: '#34d399', borderWidth: 1 },
+                    { label: 'هزینه', data: expenseData, backgroundColor: 'rgba(251,113,133,0.7)', borderColor: '#fb7185', borderWidth: 1 }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { labels: { color: '#e8edf6', font: { family: 'Vazirmatn' } } },
+                    tooltip: { backgroundColor: '#17223a', titleColor: '#f1f5f9', bodyColor: '#94a3b8' }
+                },
+                scales: {
+                    x: { grid: { color: 'rgba(71,85,105,0.2)' }, ticks: { color: '#8c9bb5', font: { family: 'Vazirmatn' } } },
+                    y: { grid: { color: 'rgba(71,85,105,0.2)' }, ticks: { color: '#8c9bb5', font: { family: 'Vazirmatn' } } }
+                }
+            }
+        });
+    }
+
+    // نمودار دایره‌ای
+    const pieCanvas = document.getElementById('categoryChart');
+    if (pieCanvas) {
+        const ctx = pieCanvas.getContext('2d');
+        const byCat = {};
+        for (const t of transactions.filter(t => t.type === 'expense')) {
+            const cat = categories.find(c => c.id === t.categoryId);
+            const key = cat ? cat.name : 'نامشخص';
+            byCat[key] = (byCat[key] || 0) + t.amount;
+        }
+        const entries = Object.entries(byCat).sort((a, b) => b[1] - a[1]).slice(0, 8);
+        const colors = ['#7aa2ff','#a78bfa','#34d399','#f5b84b','#fb7185','#60a5fa','#c084fc','#8c9bb5'];
+
+        if (categoryChart) categoryChart.destroy();
+        categoryChart = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: entries.map(e => e[0]),
+                datasets: [{ data: entries.map(e => e[1]), backgroundColor: colors, borderColor: '#111a2c', borderWidth: 2 }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'bottom', labels: { color: '#e8edf6', font: { family: 'Vazirmatn' } } },
+                    tooltip: { backgroundColor: '#17223a', titleColor: '#f1f5f9', bodyColor: '#94a3b8' }
+                }
+            }
+        });
+    }
+
+    // آمار کلی
+    const totalIncome = transactions.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
+    const totalExpense = transactions.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+    const totalInvestment = transactions.filter(t => t.type === 'investment').reduce((s, t) => s + t.amount, 0);
+
+    document.getElementById('totalIncomeAll').textContent = formatMoney(totalIncome);
+    document.getElementById('totalExpenseAll').textContent = formatMoney(totalExpense);
+    document.getElementById('totalInvestmentAll').textContent = formatMoney(totalInvestment);
+    document.getElementById('totalTransactionsCount').textContent = transactions.length;
+
+    // میانگین هزینه روزانه
+    if (transactions.length > 0) {
+        const dates = transactions.map(t => new Date(t.date).getTime()).filter(d => !isNaN(d));
+        if (dates.length > 0) {
+            const minDate = Math.min(...dates);
+            const days = Math.max(1, Math.ceil((Date.now() - minDate) / 86400000));
+            document.getElementById('avgDailyExpense').textContent = formatMoney(totalExpense / days);
+        } else {
+            document.getElementById('avgDailyExpense').textContent = '0';
+        }
+    } else {
+        document.getElementById('avgDailyExpense').textContent = '0';
+    }
+
+    const maxExp = transactions.filter(t => t.type === 'expense').reduce((m, t) => Math.max(m, t.amount), 0);
+    document.getElementById('maxExpense').textContent = formatMoney(maxExp);
+}
+
+// ===== حساب‌ها =====
+function renderAccounts() {
+    const el = document.getElementById('accountsList');
+    if (!el) return;
+
+    if (accounts.length === 0) {
+        el.innerHTML = '<p style="color:var(--muted);text-align:center;padding:30px;">حسابی وجود ندارد. یکی اضافه کنید.</p>';
+        return;
+    }
+
+    el.innerHTML = accounts.map(acc => {
+        const balance = getAccountBalance(acc.id);
+        const typeInfo = ACCOUNT_TYPES[acc.type] || ACCOUNT_TYPES.other;
+        return `<div class="account-card">
+            <div class="account-card-info">
+                <div class="account-card-icon" data-type="${acc.type}"><i class="fas ${typeInfo.icon}"></i></div>
+                <div>
+                    <div class="account-card-name">${escapeHTML(acc.name)}</div>
+                    <div class="account-card-type">${typeInfo.label}</div>
+                </div>
             </div>
-            <div class="account-vip">
-                <select class="account-vip-select" onchange="setAccountVip(${a.id}, this.value)" title="VIP">${vipOptionsHTML(a.vipLevel)}</select>
-            </div>
-            <div class="account-actions">
-                <button class="account-action-btn" onclick="switchAccount(${a.id})" ${isActive ? 'disabled' : ''} title="فعال"><i class="fas fa-check-circle"></i></button>
-                <button class="account-action-btn delete" onclick="deleteAccount(${a.id})" ${a.id === 1 ? 'disabled' : ''} title="حذف"><i class="fas fa-trash"></i></button>
+            <div class="account-card-balance">${formatMoney(balance)} ${currency}</div>
+            <div class="account-card-actions">
+                <button class="btn-icon delete" onclick="deleteAccountConfirm(${acc.id})" title="حذف"><i class="fas fa-trash"></i></button>
             </div>
         </div>`;
     }).join('');
 }
 
-async function addNewAccount() {
+async function addAccount() {
     const name = document.getElementById('newAccountName').value.trim();
-    const balance = toNumber(document.getElementById('newAccountBalance').value);
-    const vip = normalizeVip(document.getElementById('newAccountVip').value);
+    const type = document.getElementById('newAccountType').value;
+    const initial = toNumber(document.getElementById('newAccountInitial').value);
+
     if (!name) { showNotification('نام حساب را وارد کنید.', 'error'); return; }
-    if (balance <= 0) { showNotification('موجودی اولیه معتبر وارد کنید.', 'error'); return; }
-    if (accounts.find(a => a.name.toLowerCase() === name.toLowerCase())) { showNotification('این نام قبلاً وجود دارد.', 'error'); return; }
-    const newId = accounts.length > 0 ? Math.max(...accounts.map(a => a.id)) + 1 : 1;
-    accounts.push({ id: newId, name, balance: Math.round(balance * 100) / 100, vipLevel: vip });
-    await saveAccountsToDB();
-    document.getElementById('newAccountName').value = '';
-    document.getElementById('newAccountBalance').value = '';
-    updateAccountsList();
-    showNotification('حساب اضافه شد.', 'success');
-}
-
-// ✅ deleteAccount که واقعاً از IndexedDB پاک می‌کند
-async function deleteAccount(accountId) {
-    if (accountId === 1) { showNotification('حساب اصلی حذف نمی‌شود.', 'error'); return; }
-    if (accounts.length <= 1) { showNotification('حداقل یک حساب لازم است.', 'error'); return; }
-    if (!confirm('حذف این حساب و تمام معاملاتش؟')) return;
-    try {
-        await db.deleteAccount(accountId);
-        const accTrades = await db.getTradesByAccount(accountId);
-        if (accTrades.length > 0) await db.deleteTrades(accTrades.map(t => t.id));
-        accounts = accounts.filter(a => a.id !== accountId);
-        if (accountId === activeAccountId) {
-            activeAccountId = 1;
-            activeAccount = accounts.find(a => a.id === 1);
-            accountBalance = activeAccount ? activeAccount.balance : 0;
-            initialAccountBalance = accountBalance;
-        }
-        trades = await db.getTradesByAccount(activeAccountId);
-        await saveAccountsToDB();
-        updateBalanceDisplay();
-        updateAccountsList();
-        loadTrades();
-        loadOpenTrades();
-        updateStats();
-        updateDetailedStats();
-        updateTotalRisk();
-        updateGrowthChart();
-        updateMonthlyGrowthChart();
-        setInitialMonthBasedOnLastTrade();
-        updateMonthlyDashboard();
-        showNotification('حساب حذف شد.', 'warning');
-    } catch (e) {
-        console.error(e);
-        showNotification('خطا در حذف حساب.', 'error');
-    }
-}
-
-async function switchAccount(accountId) {
-    const newAcc = accounts.find(a => a.id === accountId);
-    if (!newAcc) { showNotification('حساب یافت نشد.', 'error'); return; }
-    activeAccountId = accountId;
-    activeAccount = newAcc;
-    accountBalance = newAcc.balance;
-    initialAccountBalance = accountBalance;
-    await db.saveSetting('activeAccountId', activeAccountId.toString());
-    trades = await db.getTradesByAccount(activeAccountId);
-    updateBalanceDisplay();
-    updateAccountsList();
-    loadTrades();
-    loadOpenTrades();
-    updateStats();
-    updateDetailedStats();
-    updateTotalRisk();
-    updateGrowthChart();
-    updateMonthlyGrowthChart();
-    setInitialMonthBasedOnLastTrade();
-    updateMonthlyDashboard();
-    calculateRisk();
-    showNotification(`«${newAcc.name}» فعال شد.`, 'success');
-    closeAllModals();
-}
-
-function changeMonth(dir) {
-    let m = currentMonth + dir, y = currentYear;
-    if (m > 12) { m = 1; y++; } else if (m < 1) { m = 12; y--; }
-    currentYear = y; currentMonth = m;
-    updateMonthlyDashboard();
-    updateMonthlyGrowthChart();
-}
-
-function updateMonthlyDashboard() {
-    const md = document.getElementById('currentMonthDisplay');
-    if (!md) return;
-    md.textContent = persianMonths[currentMonth - 1] + ' ' + currentYear;
-    const now = getPersianDateParts(new Date());
-    const nextBtn = document.getElementById('nextMonthBtn');
-    if (nextBtn) nextBtn.disabled = !!(now && currentYear === now.year && currentMonth === now.month);
-
-    const monthly = trades.filter(t => {
-        if (t.accountId !== activeAccountId) return false;
-        const pd = getPersianDateParts(t.date);
-        return pd && pd.year === currentYear && pd.month === currentMonth;
-    });
-    document.getElementById('monthlyTradeCount').textContent = monthly.length;
-    let totalPnL = 0, prof = 0, loss = 0;
-    monthly.forEach(t => {
-        if (t.status === 'closed') {
-            const p = calculateTradePnL(t);
-            totalPnL += p;
-            if (p > 0) prof++; else if (p < 0) loss++;
-        }
-    });
-    const tp = document.getElementById('monthlyTotalPnL');
-    tp.textContent = (totalPnL >= 0 ? '+' : '') + formatCurrency(Math.abs(totalPnL));
-    tp.style.color = totalPnL >= 0 ? '#10b981' : '#ef4444';
-    document.getElementById('monthlyProfitable').textContent = prof;
-    document.getElementById('monthlyLoss').textContent = loss;
-
-    const tbody = document.getElementById('monthlyTradesBody');
-    if (monthly.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="7" class="no-trades-month"><i class="fas fa-chart-line" style="font-size:2rem;margin-bottom:15px;display:block;"></i>معامله‌ای در این ماه نیست</td></tr>`;
+    if (accounts.some(a => a.name.toLowerCase() === name.toLowerCase())) {
+        showNotification('این نام قبلاً استفاده شده.', 'error');
         return;
     }
-    const sorted = [...monthly].sort((a, b) => new Date(b.date) - new Date(a.date));
-    tbody.innerHTML = sorted.map(t => {
-        let pnlTxt = 'باز', pnlCls = 'neutral';
-        if (t.status === 'closed') {
-            const p = calculateTradePnL(t);
-            pnlTxt = (p >= 0 ? '+' : '−') + formatCurrency(Math.abs(p));
-            pnlCls = p > 0 ? 'profit' : (p < 0 ? 'loss' : 'neutral');
-        }
-        return `<tr onclick="showTradeDetails(${t.id})">
-            <td data-label="تاریخ">${formatPersianDate(t.date, true)}</td>
-            <td data-label="ارز"><span class="crypto-badge" style="font-size:0.8rem;">${escapeHTML(t.symbol)}</span></td>
-            <td data-label="نوع">${t.type === 'buy' ? 'لانگ' : 'شورت'}</td>
-            <td class="price-display" data-label="ورود">${escapeHTML(t.entryPriceStr || t.entryPrice)}</td>
-            <td class="price-display" data-label="خروج">${t.status === 'closed' ? escapeHTML(t.closedPrice) : '-'}</td>
-            <td data-label="سود/ضرر"><span class="${pnlCls}">${pnlTxt}</span></td>
-            <td data-label="وضعیت"><span class="${t.status === 'open' ? 'profit' : 'neutral'}">${t.status === 'open' ? 'باز' : 'بسته'}</span></td>
-        </tr>`;
-    }).join('');
+
+    const acc = {
+        id: generateId(),
+        name,
+        type,
+        initialBalance: initial,
+        isActive: true,
+        createdAt: new Date().toISOString()
+    };
+    accounts.push(acc);
+    await db.saveAccounts(accounts);
+
+    document.getElementById('newAccountName').value = '';
+    document.getElementById('newAccountInitial').value = '';
+
+    renderAccounts();
+    refreshAllSelects();
+    updateAccountsCount();
+    showNotification('✅ حساب اضافه شد', 'success');
 }
 
-function showProgress(message, percent = 0) {
-    const p = document.getElementById('backupProgress');
-    if (!p) return;
-    p.classList.add('active');
-    const bar = document.getElementById('progressBar'); if (bar) bar.style.width = percent + '%';
-    const txt = document.getElementById('progressText'); if (txt) txt.textContent = message;
-    const st = document.getElementById('progressStatus'); if (st) st.textContent = percent + '%';
-    const c = document.getElementById('cancelImportBtn'); if (c) c.style.display = 'inline-block';
-}
-function hideProgress() {
-    const p = document.getElementById('backupProgress'); if (p) p.classList.remove('active');
-    const c = document.getElementById('cancelImportBtn'); if (c) c.style.display = 'none';
-}
-function cancelImport() { isImportCancelled = true; hideProgress(); showNotification('لغو شد', 'warning'); }
+async function deleteAccountConfirm(id) {
+    if (accounts.length <= 1) {
+        showNotification('حداقل یک حساب باید وجود داشته باشد.', 'error');
+        return;
+    }
+    const hasTx = transactions.some(t => t.accountId === id || t.toAccountId === id);
+    if (hasTx) {
+        showNotification('این حساب تراکنش دارد و قابل حذف نیست.', 'error');
+        return;
+    }
+    if (!confirm('این حساب حذف شود؟')) return;
 
+    await db.deleteAccount(id);
+    accounts = accounts.filter(a => a.id !== id);
+    await db.saveAccounts(accounts);
+    renderAccounts();
+    refreshAllSelects();
+    updateAccountsCount();
+    showNotification('حساب حذف شد.', 'warning');
+}
+
+// ===== بکاپ =====
 async function exportData() {
     try {
         showProgress('آماده‌سازی...', 10);
         const backupData = await db.backup();
         showProgress('ایجاد ZIP...', 30);
         const zip = new JSZip();
-        const exportTrades = backupData.trades.map(t => ({ ...t, entryScreenshot: t.entryScreenshotName || null, exitScreenshot: t.exitScreenshotName || null }));
-        zip.file('data.json', JSON.stringify({ ...backupData, trades: exportTrades }, null, 2));
+
+        const exportTxs = backupData.transactions.map(t => ({
+            ...t,
+            attachment: t.attachmentName || null
+        }));
+
+        zip.file('data.json', JSON.stringify({ ...backupData, transactions: exportTxs }, null, 2));
         showProgress('پردازش تصاویر...', 50);
         const imgFolder = zip.folder('images');
+
         let count = 0, processed = 0;
-        backupData.trades.forEach(t => { if (t.entryScreenshot) count++; if (t.exitScreenshot) count++; });
-        for (const t of backupData.trades) {
+        backupData.transactions.forEach(t => { if (t.attachment) count++; });
+
+        for (const t of backupData.transactions) {
             if (isImportCancelled) { showNotification('لغو شد', 'warning'); hideProgress(); return; }
-            if (t.entryScreenshot && t.entryScreenshotName) {
-                imgFolder.file(t.entryScreenshotName, t.entryScreenshot.split(',')[1], { base64: true });
-                processed++;
-                showProgress(`تصویر ${processed}/${count}...`, 50 + Math.floor((processed / Math.max(1, count)) * 40));
-            }
-            if (t.exitScreenshot && t.exitScreenshotName) {
-                imgFolder.file(t.exitScreenshotName, t.exitScreenshot.split(',')[1], { base64: true });
+            if (t.attachment && t.attachmentName) {
+                imgFolder.file(t.attachmentName, t.attachment.split(',')[1], { base64: true });
                 processed++;
                 showProgress(`تصویر ${processed}/${count}...`, 50 + Math.floor((processed / Math.max(1, count)) * 40));
             }
         }
+
         showProgress('نهایی‌سازی...', 90);
         const now = new Date();
         const pd = new Intl.DateTimeFormat('fa-IR', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(now).replace(/\//g, '-');
-        const fileName = `crypto-journal-${pd}.zip`;
+        const fileName = `finance-backup-${pd}.zip`;
         const content = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
         showProgress('دانلود...', 100);
-        await db.saveSetting('lastBackupAt', String(Date.now()));
 
-        if (window.navigator.standalone && navigator.canShare) {
-            const file = new File([content], fileName, { type: 'application/zip' });
-            if (navigator.canShare({ files: [file] })) {
-                try { await navigator.share({ files: [file], title: fileName }); hideProgress(); showNotification('آماده ذخیره شد.', 'success'); return; }
-                catch (e) { if (e && e.name === 'AbortError') { hideProgress(); return; } }
-            }
-        }
         const url = URL.createObjectURL(content);
         const link = document.createElement('a');
-        link.href = url; link.download = fileName; link.click();
+        link.href = url;
+        link.download = fileName;
+        link.click();
         setTimeout(() => URL.revokeObjectURL(url), 30000);
-        setTimeout(hideProgress, 2000);
-        showNotification('دانلود شد.', 'success');
+        setTimeout(hideProgress, 1500);
+        showNotification('✅ دانلود شد', 'success');
     } catch (e) {
-        console.error(e); hideProgress(); showNotification('خطا: ' + e.message, 'error');
-    } finally { isImportCancelled = false; }
+        console.error(e);
+        hideProgress();
+        showNotification('خطا: ' + e.message, 'error');
+    } finally {
+        isImportCancelled = false;
+    }
 }
 
 async function importData() {
     const fileInput = document.getElementById('backupFile');
     const file = fileInput.files[0];
     if (!file) { showNotification('فایل ZIP انتخاب کنید.', 'error'); return; }
-    const MAX = 2 * 1024 * 1024 * 1024;
-    if (file.size > MAX) { showNotification('حجم بیش از ۲GB', 'error'); fileInput.value = ''; return; }
     if (!confirm('اطلاعات فعلی جایگزین می‌شود. ادامه؟')) return;
 
     isImportCancelled = false;
-    importStartTime = Date.now();
     let snapshot = null, wiped = false;
-    let failedCount = 0;  // ✅ شمارش خطاها
+    let failedCount = 0;
+
     const restore = async () => {
         if (!wiped || !snapshot) return;
         try {
             await db.clearAll();
             await db.saveAccounts(snapshot.accounts || []);
-            await db.saveTrades(snapshot.trades || []);
-            if (snapshot.settings) {
-                for (const s of snapshot.settings) await db.saveSetting(s.key, s.value);
-            }
-            if (snapshot.activeId) await db.saveSetting('activeAccountId', snapshot.activeId);
-            await loadAccountsFromDB();
-            await loadTradesFromDB();
-            updateBalanceDisplay();
-            updateStats();
-        } catch (e) { console.error('restore error:', e); }
+            await db.saveCategories(snapshot.categories || []);
+            for (const s of (snapshot.settings || [])) await db.saveSetting(s.key, s.value);
+            for (const t of (snapshot.transactions || [])) await db.saveTransaction(t);
+            await loadAccounts();
+            await loadCategories();
+            await loadTransactionsFromDB();
+        } catch (e) { console.error('restore:', e); }
         wiped = false;
     };
 
@@ -1506,312 +1239,156 @@ async function importData() {
                             const name = rel.split('/').pop();
                             imagesMap.set(name, `data:${getMimeType(name)};base64,${content}`);
                             done++;
-                            const pct = 30 + Math.floor((done / Math.max(1, total)) * 30);
-                            showProgress(`تصویر ${done}/${total}`, pct);
-                        }).catch(err => {
-                            console.warn('تصویر خراب نادیده گرفته شد:', rel, err);
-                            done++;
-                        })
+                            showProgress(`تصویر ${done}/${total}`, 30 + Math.floor((done / Math.max(1, total)) * 30));
+                        }).catch(err => { console.warn('skip image', rel, err); done++; })
                     );
                 }
             });
             await Promise.all(proms);
             if (isImportCancelled) { showNotification('لغو شد', 'warning'); hideProgress(); return; }
         }
-        showProgress('اتصال عکس‌ها...', 60);
 
-        const validIds = new Set((backupData.accounts || []).map(a => a.id));
-        const fallbackId = backupData.accounts && backupData.accounts.length > 0 ? backupData.accounts[0].id : 1;
-        if (backupData.trades && Array.isArray(backupData.trades)) {
-            for (const t of backupData.trades) {
-                if (isImportCancelled) { showNotification('لغو شد', 'warning'); hideProgress(); return; }
-                if (!t.uid) t.uid = `trade_${t.id}`;
-                if (!t.accountId || !validIds.has(t.accountId)) t.accountId = fallbackId;
-                if (t.id == null || isNaN(parseInt(t.id))) t.id = generateTradeId();
-                if (t.entryScreenshot) {
-                    const fn = `entry_${t.uid}.png`;
-                    if (imagesMap.has(fn)) { t.entryScreenshot = imagesMap.get(fn); t.entryScreenshotName = fn; }
-                    else { t.entryScreenshot = null; t.entryScreenshotName = null; }
-                }
-                if (t.exitScreenshot) {
-                    const fn = `exit_${t.uid}.png`;
-                    if (imagesMap.has(fn)) { t.exitScreenshot = imagesMap.get(fn); t.exitScreenshotName = fn; }
-                    else { t.exitScreenshot = null; t.exitScreenshotName = null; }
-                }
-                if (t.baseBalanceAtEntry == null && t.riskPercent > 0 && t.totalRiskAmount > 0) {
-                    t.baseBalanceAtEntry = t.totalRiskAmount * 100 / t.riskPercent;
-                }
-            }
-        }
-
-        showProgress('ذخیره...', 70);
+        showProgress('آماده‌سازی...', 65);
         snapshot = await db.backup();
-        snapshot.activeId = await db.getSetting('activeAccountId');
         await db.clearAll();
         wiped = true;
 
-        if (backupData.accounts && Array.isArray(backupData.accounts)) {
-            await db.saveAccounts(backupData.accounts);
-            accounts = backupData.accounts;
-        }
-        // ✅ بازگردانی settings (customStrategies و غیره)
-        if (backupData.settings && Array.isArray(backupData.settings)) {
+        if (backupData.accounts) await db.saveAccounts(backupData.accounts);
+        if (backupData.categories) await db.saveCategories(backupData.categories);
+        if (backupData.settings) {
             for (const s of backupData.settings) {
-                try { await db.saveSetting(s.key, s.value); } catch (e) { console.warn('skip setting', s.key); }
+                try { await db.saveSetting(s.key, s.value); } catch (e) {}
             }
-            const cs = backupData.settings.find(s => s.key === 'customStrategies');
-            if (cs) { try { customStrategies = JSON.parse(cs.value || '[]'); } catch (e) {} }
         }
-        if (backupData.trades && Array.isArray(backupData.trades)) {
-            const batch = 20, totalT = backupData.trades.length;
-            trades = [];
+
+        if (backupData.transactions && Array.isArray(backupData.transactions)) {
+            const batch = 20;
+            const totalT = backupData.transactions.length;
             for (let i = 0; i < totalT; i += batch) {
-                if (isImportCancelled) { await restore(); showNotification('لغو و بازگردانی', 'warning'); hideProgress(); return; }
-                const b = backupData.trades.slice(i, i + batch);
+                if (isImportCancelled) { await restore(); showNotification('لغو شد', 'warning'); hideProgress(); return; }
+                const b = backupData.transactions.slice(i, i + batch);
                 for (const t of b) {
-                    try { await db.saveTrade(t); trades.push(t); }
+                    if (!t.uid) t.uid = `tx_${t.id}`;
+                    if (t.attachment) {
+                        const fn = `receipt_${t.id}.jpg`;
+                        if (imagesMap.has(t.attachmentName)) {
+                            t.attachment = imagesMap.get(t.attachmentName);
+                        } else {
+                            t.attachment = null;
+                            t.attachmentName = null;
+                        }
+                    }
+                    try { await db.saveTransaction(t); }
                     catch (e) {
                         if (e.message.includes('فضا')) { isImportCancelled = true; await restore(); hideProgress(); showNotification(e.message, 'error'); return; }
                         failedCount++;
-                        console.error('خطا در ذخیره معامله', t.id, e);
+                        console.error('skip tx', t.id, e);
                     }
                 }
                 showProgress(`ذخیره ${i + b.length}/${totalT}`, 70 + Math.floor((i / totalT) * 25));
                 await new Promise(r => setTimeout(r, 5));
             }
         }
-        if (accounts.length > 0) {
-            const savedId = await db.getSetting('activeAccountId');
-            activeAccountId = savedId ? parseInt(savedId) : accounts[0].id;
-            activeAccount = accounts.find(a => a.id === activeAccountId) || accounts[0];
-            accountBalance = activeAccount ? activeAccount.balance : 0;
-            initialAccountBalance = accountBalance;
-        }
-        showProgress('نهایی...', 100);
-        updateBalanceDisplay();
-        updateAccountsList();
-        loadTrades();
-        loadOpenTrades();
-        updateStats();
-        updateDetailedStats();
-        updateTotalRisk();
-        updateGrowthChart();
-        updateMonthlyGrowthChart();
-        setInitialMonthBasedOnLastTrade();
-        updateMonthlyDashboard();
-        refreshStrategyList();
+
+        await loadAccounts();
+        await loadCategories();
+        await loadTransactionsFromDB();
+        await loadSettings();
+        await refreshAllSelects();
+
+        updateDashboard();
+        updateAccountsCount();
+        updateAnalysis();
+
         fileInput.value = '';
-        setTimeout(hideProgress, 2000);
+        setTimeout(hideProgress, 1500);
         if (failedCount > 0) {
-            showNotification(`⚠️ بارگذاری شد ولی ${failedCount} معامله ذخیره نشد (${trades.length} از ${backupData.trades?.length || 0})`, 'warning');
+            showNotification(`⚠️ بارگذاری شد ولی ${failedCount} تراکنش ناموفق بود.`, 'warning');
         } else {
-            showNotification(`✅ بارگذاری شد. ${trades.length} معامله`, 'success');
+            showNotification(`✅ ${transactions.length} تراکنش بازیابی شد`, 'success');
         }
-        checkStorage();
     } catch (e) {
-        console.error(e); await restore(); hideProgress();
-        showNotification('❌ ' + (e.message || 'خطا در خواندن فایل'), 'error');
-    } finally { isImportCancelled = false; }
+        console.error(e);
+        await restore();
+        hideProgress();
+        showNotification('❌ ' + (e.message || 'خطا'), 'error');
+    } finally {
+        isImportCancelled = false;
+    }
 }
 
+function showProgress(msg, pct = 0) {
+    const p = document.getElementById('backupProgress');
+    if (!p) return;
+    p.classList.add('active');
+    const bar = document.getElementById('progressBar'); if (bar) bar.style.width = pct + '%';
+    const txt = document.getElementById('progressText'); if (txt) txt.textContent = msg;
+    const st = document.getElementById('progressStatus'); if (st) st.textContent = pct + '%';
+    const c = document.getElementById('cancelImportBtn'); if (c) c.style.display = 'inline-block';
+}
+
+function hideProgress() {
+    const p = document.getElementById('backupProgress'); if (p) p.classList.remove('active');
+    const c = document.getElementById('cancelImportBtn'); if (c) c.style.display = 'none';
+}
+
+function cancelImport() { isImportCancelled = true; hideProgress(); showNotification('لغو شد', 'warning'); }
+
+async function checkStorage() {
+    if (!navigator.storage || !navigator.storage.estimate) return;
+    try {
+        const { usage, quota } = await navigator.storage.estimate();
+        if (!quota) return;
+        const ratio = usage / quota;
+        if (ratio > 0.85) showNotification(`⚠️ ${(ratio*100).toFixed(0)}٪ فضا پر شده. بکاپ بگیرید.`, 'error');
+        else if (ratio > 0.7) showNotification(`فضا: ${(ratio*100).toFixed(0)}٪ پر شده.`, 'warning');
+    } catch (e) {}
+}
+
+// ===== Notification =====
 function showNotification(msg, type = 'info') {
     const ex = document.querySelector('.notification'); if (ex) ex.remove();
     const n = document.createElement('div');
     n.className = 'notification';
     n.textContent = msg;
-    Object.assign(n.style, { position: 'fixed', top: '20px', left: '50%', transform: 'translateX(-50%)', padding: '12px 20px', borderRadius: '8px', zIndex: '10000', fontWeight: '600', boxShadow: '0 5px 15px rgba(0,0,0,0.3)', maxWidth: '90vw', textAlign: 'center' });
     if (type === 'success') { n.style.backgroundColor = '#10b981'; n.style.color = 'white'; }
     else if (type === 'warning') { n.style.backgroundColor = '#f59e0b'; n.style.color = '#78350f'; }
     else if (type === 'error') { n.style.backgroundColor = '#ef4444'; n.style.color = 'white'; }
     else { n.style.backgroundColor = '#3b82f6'; n.style.color = 'white'; }
     document.body.appendChild(n);
     setTimeout(() => {
-        n.style.opacity = '0'; n.style.transition = 'opacity 0.5s';
+        n.style.opacity = '0';
+        n.style.transition = 'opacity 0.5s';
         setTimeout(() => { if (n.parentNode) n.parentNode.removeChild(n); }, 500);
     }, 3000);
 }
 
-document.addEventListener('DOMContentLoaded', function() {
-    const now = new Date();
-    const off = now.getTimezoneOffset() * 60000;
-    document.getElementById('date').value = new Date(now - off).toISOString().slice(0, 16);
-    document.getElementById('newAccountVip').innerHTML = vipOptionsHTML('vip0');
-
-    document.getElementById('tradeForm').addEventListener('reset', () => {
-        editingTradeId = null;
-        editBaseBalance = null;
-        setTimeout(() => {
-            removeEntryScreenshot();
-            const fd = document.getElementById('feeDetails'); if (fd) fd.style.display = 'none';
-            syncAutoFee();
-        }, 0);
-    });
-
+// ===== Event Listeners =====
+document.addEventListener('DOMContentLoaded', () => {
+    setDefaultDate();
     initialize();
 
-    ['entryPrice', 'stopLoss', 'takeProfit', 'riskPercent', 'feePercent'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.addEventListener('input', calculateRisk);
-    });
-    const typeEl = document.getElementById('type');
-    if (typeEl) typeEl.addEventListener('change', calculateRisk);
-
-    const nb = document.getElementById('newBalanceInput');
-    if (nb) nb.addEventListener('input', function() {
-        const v = toNumber(this.value);
-        if (v > 0) this.value = Math.round(v * 100) / 100;
-    });
-    const nab = document.getElementById('newAccountBalance');
-    if (nab) nab.addEventListener('input', function() {
-        const v = toNumber(this.value);
-        if (v > 0) this.value = Math.round(v * 100) / 100;
-    });
+    const amountInput = document.getElementById('amount');
+    if (amountInput) {
+        amountInput.addEventListener('blur', function() {
+            const v = toNumber(this.value);
+            if (v > 0) this.value = Math.round(v);
+        });
+    }
 
     const dm = document.getElementById('detailsModal');
     if (dm) dm.addEventListener('click', e => { if (e.target === dm) closeDetailsModal(); });
-    const cm = document.getElementById('closeTradeModal');
-    if (cm) cm.addEventListener('click', e => { if (e.target === cm) closeCloseModal(); });
     const im = document.getElementById('imageModal');
     if (im) im.addEventListener('click', e => { if (e.target === im) closeImageModal(); });
 });
 
 document.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
-        document.querySelectorAll('.modal-box.active, .details-modal, .close-modal, .image-modal').forEach(m => {
-            if (m.style.display === 'flex' || m.classList.contains('active')) {
+        document.querySelectorAll('.details-modal, .image-modal').forEach(m => {
+            if (m.style.display === 'flex') {
                 if (m.id === 'detailsModal') closeDetailsModal();
-                else if (m.id === 'closeTradeModal') closeCloseModal();
                 else if (m.id === 'imageModal') closeImageModal();
-                else if (m.classList.contains('modal-box')) toggleModal(m.id);
             }
         });
     }
 });
-
-function applyHistoryFilters(list) {
-    const v = id => (document.getElementById(id) || {}).value || '';
-    const q = v('histSearch').trim().toLowerCase();
-    const st = v('histStatus') || 'all';
-    const rs = v('histResult') || 'all';
-    const ty = v('histType') || 'all';
-    return list.filter(t => {
-        if (q && !`${t.symbol} ${t.strategy || ''} ${t.notes || ''}`.toLowerCase().includes(q)) return false;
-        if (st !== 'all' && t.status !== st) return false;
-        if (ty !== 'all' && t.type !== ty) return false;
-        if (rs !== 'all') {
-            if (t.status !== 'closed') return false;
-            const p = calculateTradePnL(t);
-            if (rs === 'win' && !(p > 0)) return false;
-            if (rs === 'loss' && !(p < 0)) return false;
-        }
-        return true;
-    });
-}
-
-function compressImage(dataUrl, cb) {
-    const img = new Image();
-    img.onload = () => {
-        const max = 1200;
-        const s = Math.min(1, max / Math.max(img.width, img.height));
-        const c = document.createElement('canvas');
-        c.width = Math.round(img.width * s);
-        c.height = Math.round(img.height * s);
-        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-        cb(c.toDataURL('image/jpeg', 0.78));
-    };
-    img.onerror = () => cb(dataUrl);
-    img.src = dataUrl;
-}
-
-function strategyNames() {
-    return [...new Set([...PRESET_STRATEGIES, ...customStrategies, ...trades.map(t => (t.strategy || '').trim()).filter(Boolean)])];
-}
-
-function refreshStrategyList(selected) {
-    const sel = document.getElementById('strategy');
-    if (!sel) return;
-    const cur = selected !== undefined ? selected : sel.value;
-    const names = strategyNames();
-    if (cur && !names.includes(cur)) names.push(cur);
-    sel.innerHTML = '<option value="">بدون استراتژی</option>' + names.map(n => `<option value="${escapeHTML(n)}">${escapeHTML(n)}</option>`).join('');
-    sel.value = cur || '';
-}
-
-async function addStrategy() {
-    const name = (prompt('نام استراتژی جدید:') || '').trim();
-    if (!name) return;
-    if (!strategyNames().includes(name)) {
-        customStrategies.push(name);
-        await db.saveSetting('customStrategies', JSON.stringify(customStrategies));
-    }
-    refreshStrategyList(name);
-}
-
-async function removeStrategy() {
-    const name = document.getElementById('strategy').value;
-    if (!name) return;
-    if (PRESET_STRATEGIES.includes(name)) { showNotification('پیش‌فرض قابل حذف نیست.', 'warning'); return; }
-    if (trades.some(t => t.strategy === name)) { showNotification('در معامله‌ها استفاده شده.', 'warning'); return; }
-    customStrategies = customStrategies.filter(n => n !== name);
-    await db.saveSetting('customStrategies', JSON.stringify(customStrategies));
-    refreshStrategyList('');
-}
-
-function renderAdvancedStats() {
-    const box = document.getElementById('advancedStats');
-    if (!box) return;
-    const rows = trades.filter(t => t.status === 'closed')
-        .sort((a, b) => new Date(a.closedDate || a.date) - new Date(b.closedDate || b.date))
-        .map(t => { const pnl = calculateTradePnL(t); return { t, pnl, r: t.totalRiskAmount > 0 ? pnl / t.totalRiskAmount : 0 }; });
-    if (!rows.length) {
-        box.innerHTML = '<h2 class="section-title"><i class="fas fa-microscope"></i> تحلیل پیشرفته</h2><p class="adv-empty">بعد از اولین معامله‌ی بسته، تحلیل اینجا نمایش داده می‌شود.</p>';
-        return;
-    }
-    const n = rows.length;
-    const wins = rows.filter(x => x.pnl > 0);
-    const losses = rows.filter(x => x.pnl < 0);
-    const gp = wins.reduce((s, x) => s + x.pnl, 0);
-    const gl = Math.abs(losses.reduce((s, x) => s + x.pnl, 0));
-    const pf = gl > 0 ? (gp / gl).toFixed(2) : (gp > 0 ? '∞' : '-');
-    const avgR = rows.reduce((s, x) => s + x.r, 0) / n;
-    const avgWin = wins.length ? gp / wins.length : 0;
-    const avgLoss = losses.length ? gl / losses.length : 0;
-    const payoff = avgLoss > 0 ? (avgWin / avgLoss).toFixed(2) : '-';
-    let eq = initialAccountBalance, peak = eq, mdd = 0, mddP = 0;
-    rows.forEach(x => { eq += x.pnl; if (eq > peak) peak = eq; const d = peak - eq; if (d > mdd) { mdd = d; mddP = peak > 0 ? d / peak * 100 : 0; } });
-    let maxW = 0, maxL = 0, cw = 0, cl = 0;
-    rows.forEach(x => {
-        if (x.pnl > 0) { cw++; cl = 0; } else if (x.pnl < 0) { cl++; cw = 0; } else { cw = 0; cl = 0; }
-        maxW = Math.max(maxW, cw); maxL = Math.max(maxL, cl);
-    });
-    const cur = cw > 0 ? `${cw} برد` : (cl > 0 ? `${cl} باخت` : '-');
-    const sgn = v => (v >= 0 ? '+' : '-') + formatCurrency(Math.abs(v));
-    const tile = (l, v, c) => `<div class="adv-tile"><div class="adv-label">${l}</div><div class="adv-value ${c || ''}">${v}</div></div>`;
-    const days = ['یکشنبه','دوشنبه','سه‌شنبه','چهارشنبه','پنجشنبه','جمعه','شنبه'];
-    const group = keyFn => {
-        const m = new Map();
-        rows.forEach(x => {
-            const k = keyFn(x.t) || 'نامشخص';
-            const g = m.get(k) || { n: 0, w: 0, pnl: 0, r: 0 };
-            g.n++; if (x.pnl > 0) g.w++; g.pnl += x.pnl; g.r += x.r;
-            m.set(k, g);
-        });
-        return [...m.entries()].sort((a, b) => b[1].pnl - a[1].pnl);
-    };
-    const table = (title, list) => `<div class="adv-block"><h3>${title}</h3><div class="adv-table-wrap"><table class="adv-table"><thead><tr><th>مورد</th><th>تعداد</th><th>وین‌ریت</th><th>میانگین R</th><th>سود/زیان</th></tr></thead><tbody>` +
-        list.map(([k, g]) => `<tr><td>${escapeHTML(k)}</td><td>${g.n}</td><td>${Math.round(g.w / g.n * 100)}%</td><td>${(g.r / g.n).toFixed(2)}</td><td class="${g.pnl >= 0 ? 'profit' : 'loss'}">${sgn(g.pnl)}</td></tr>`).join('') +
-        '</tbody></table></div></div>';
-    box.innerHTML = '<h2 class="section-title"><i class="fas fa-microscope"></i> تحلیل پیشرفته</h2><div class="adv-grid">' +
-        tile('ضریب سود (Profit Factor)', pf, parseFloat(pf) >= 1 || pf === '∞' ? 'profit' : 'loss') +
-        tile('میانگین R', avgR.toFixed(2) + 'R', avgR >= 0 ? 'profit' : 'loss') +
-        tile('امید ریاضی (هر معامله)', sgn((gp - gl) / n), gp - gl >= 0 ? 'profit' : 'loss') +
-        tile('میانگین سود / ضرر', `${formatCurrency(avgWin)} / ${formatCurrency(avgLoss)}`) +
-        tile('نسبت سود به ضرر', payoff) +
-        tile('حداکثر دراودان', `${formatCurrency(mdd)} (${mddP.toFixed(1)}%)`, mdd > 0 ? 'loss' : '') +
-        tile('بیشترین برد پیاپی', maxW) +
-        tile('بیشترین باخت پیاپی', maxL) +
-        tile('رگه‌ی فعلی', cur) + '</div>' +
-        table('بر اساس نماد', group(t => t.symbol)) +
-        table('بر اساس استراتژی', group(t => t.strategy)) +
-        table('بر اساس روز هفته', group(t => { const d = new Date(t.date); return isNaN(d) ? '' : days[d.getDay()]; }));
-}
