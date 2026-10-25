@@ -1,5 +1,5 @@
 // ============================================================
-// JournalMe Finance - منطق کامل (نسخه نهایی)
+// JournalMe Finance - منطق کامل (نسخه نهایی، بدون نمودار درآمد/هزینه)
 // ============================================================
 
 function getPersianDateParts(date) {
@@ -358,7 +358,6 @@ let currentType = 'expense';
 let editingTransactionId = null;
 let currentAttachmentData = null;
 let trendChart = null;
-let incomeExpenseChart = null;
 let categoryChart = null;
 let isImportCancelled = false;
 let currentCategoryType = 'expense';
@@ -934,71 +933,7 @@ async function deleteTransaction(id) {
 }
 
 function updateAnalysis() {
-    const range = parseInt(document.getElementById('analysisRange')?.value || 6);
-    const now = new Date();
-    const months = [];
-    for (let i = range - 1; i >= 0; i--) {
-        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-        months.push(getPersianDateParts(d));
-    }
-
-    const incomeData = [];
-    const expenseData = [];
-    for (const m of months) {
-        const mTx = transactions.filter(t => {
-            const d = getPersianDateParts(t.date);
-            return d && d.year === m.year && d.month === m.month;
-        });
-        incomeData.push(mTx.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0));
-        expenseData.push(mTx.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0));
-    }
-
-    const monthNames = ['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند'];
-    const labels = months.map(m => monthNames[m.month - 1] + ' ' + m.year);
-
-    console.log('📊 تحلیل:', { labels, incomeData, expenseData, totalTx: transactions.length });
-
-    const lineCanvas = document.getElementById('incomeExpenseChart');
-    if (lineCanvas) {
-        if (incomeExpenseChart) { incomeExpenseChart.destroy(); incomeExpenseChart = null; }
-        const ctx = lineCanvas.getContext('2d');
-        incomeExpenseChart = new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels,
-                datasets: [
-                    { label: 'درآمد', data: incomeData, backgroundColor: 'rgba(52,211,153,0.7)', borderColor: '#34d399', borderWidth: 1 },
-                    { label: 'هزینه', data: expenseData, backgroundColor: 'rgba(251,113,133,0.7)', borderColor: '#fb7185', borderWidth: 1 }
-                ]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { labels: { color: '#e8edf6', font: { family: 'Vazirmatn' } } },
-                    tooltip: {
-                        backgroundColor: '#17223a',
-                        titleColor: '#f1f5f9',
-                        bodyColor: '#94a3b8',
-                        callbacks: {
-                            label: function(context) {
-                                return context.dataset.label + ': ' + formatMoney(context.parsed.y) + ' ' + currency;
-                            }
-                        }
-                    }
-                },
-                scales: {
-                    x: { grid: { color: 'rgba(71,85,105,0.2)' }, ticks: { color: '#8c9bb5', font: { family: 'Vazirmatn' } } },
-                    y: {
-                        beginAtZero: true,
-                        grid: { color: 'rgba(71,85,105,0.2)' },
-                        ticks: { color: '#8c9bb5', font: { family: 'Vazirmatn' }, callback: v => formatMoney(v) }
-                    }
-                }
-            }
-        });
-    }
-
+    // نمودار دایره‌ای سهم دسته‌ها
     const pieCanvas = document.getElementById('categoryChart');
     if (pieCanvas) {
         if (categoryChart) { categoryChart.destroy(); categoryChart = null; }
@@ -1046,6 +981,7 @@ function updateAnalysis() {
         }
     }
 
+    // آمار کلی
     const totalIncome = transactions.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
     const totalExpense = transactions.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
     const totalInvestment = transactions.filter(t => t.type === 'investment').reduce((s, t) => s + t.amount, 0);
