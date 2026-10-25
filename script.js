@@ -1,5 +1,5 @@
 // ============================================================
-// JournalMe Finance - منطق کامل (اصلاح‌شده)
+// JournalMe Finance - منطق کامل (نسخه نهایی)
 // ============================================================
 
 function getPersianDateParts(date) {
@@ -279,7 +279,6 @@ class FinanceDB {
         });
     }
 
-    // ✅ حذف واقعی دسته از IndexedDB
     deleteCategory(id) {
         this.checkReady();
         return new Promise((resolve, reject) => {
@@ -378,7 +377,9 @@ function switchSection(sectionId) {
 
     if (sectionId === 'dashboard') updateDashboard();
     if (sectionId === 'history') loadTransactions();
-    if (sectionId === 'analysis') updateAnalysis();
+    if (sectionId === 'analysis') {
+        setTimeout(() => updateAnalysis(), 50);
+    }
     if (sectionId === 'accounts') renderAccounts();
     if (sectionId === 'categories') renderCategories();
 }
@@ -706,19 +707,34 @@ function updateTrendChart() {
         data: {
             labels,
             datasets: [
-                { label: 'درآمد', data: incomeData, borderColor: '#34d399', backgroundColor: 'rgba(52,211,153,0.1)', borderWidth: 3, tension: 0.3, fill: true },
-                { label: 'هزینه', data: expenseData, borderColor: '#fb7185', backgroundColor: 'rgba(251,113,133,0.1)', borderWidth: 3, tension: 0.3, fill: true }
+                { label: 'درآمد', data: incomeData, borderColor: '#34d399', backgroundColor: 'rgba(52,211,153,0.1)', borderWidth: 3, tension: 0.3, fill: true, pointRadius: 4, pointHoverRadius: 7 },
+                { label: 'هزینه', data: expenseData, borderColor: '#fb7185', backgroundColor: 'rgba(251,113,133,0.1)', borderWidth: 3, tension: 0.3, fill: true, pointRadius: 4, pointHoverRadius: 7 }
             ]
         },
         options: {
             responsive: true, maintainAspectRatio: false,
             plugins: {
                 legend: { labels: { color: '#e8edf6', font: { family: 'Vazirmatn' } } },
-                tooltip: { backgroundColor: '#17223a', titleColor: '#f1f5f9', bodyColor: '#94a3b8', borderColor: '#243049', borderWidth: 1 }
+                tooltip: {
+                    backgroundColor: '#17223a',
+                    titleColor: '#f1f5f9',
+                    bodyColor: '#94a3b8',
+                    borderColor: '#243049',
+                    borderWidth: 1,
+                    callbacks: {
+                        label: function(context) {
+                            return context.dataset.label + ': ' + formatMoney(context.parsed.y) + ' ' + currency;
+                        }
+                    }
+                }
             },
             scales: {
                 x: { grid: { color: 'rgba(71,85,105,0.2)' }, ticks: { color: '#8c9bb5', font: { family: 'Vazirmatn' } } },
-                y: { grid: { color: 'rgba(71,85,105,0.2)' }, ticks: { color: '#8c9bb5', font: { family: 'Vazirmatn' } } }
+                y: {
+                    beginAtZero: true,
+                    grid: { color: 'rgba(71,85,105,0.2)' },
+                    ticks: { color: '#8c9bb5', font: { family: 'Vazirmatn' }, callback: v => formatMoney(v) }
+                }
             }
         }
     });
@@ -938,12 +954,14 @@ function updateAnalysis() {
     }
 
     const monthNames = ['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند'];
-    const labels = months.map(m => monthNames[m.month - 1]);
+    const labels = months.map(m => monthNames[m.month - 1] + ' ' + m.year);
+
+    console.log('📊 تحلیل:', { labels, incomeData, expenseData, totalTx: transactions.length });
 
     const lineCanvas = document.getElementById('incomeExpenseChart');
     if (lineCanvas) {
+        if (incomeExpenseChart) { incomeExpenseChart.destroy(); incomeExpenseChart = null; }
         const ctx = lineCanvas.getContext('2d');
-        if (incomeExpenseChart) incomeExpenseChart.destroy();
         incomeExpenseChart = new Chart(ctx, {
             type: 'bar',
             data: {
@@ -954,14 +972,28 @@ function updateAnalysis() {
                 ]
             },
             options: {
-                responsive: true, maintainAspectRatio: false,
+                responsive: true,
+                maintainAspectRatio: false,
                 plugins: {
                     legend: { labels: { color: '#e8edf6', font: { family: 'Vazirmatn' } } },
-                    tooltip: { backgroundColor: '#17223a', titleColor: '#f1f5f9', bodyColor: '#94a3b8' }
+                    tooltip: {
+                        backgroundColor: '#17223a',
+                        titleColor: '#f1f5f9',
+                        bodyColor: '#94a3b8',
+                        callbacks: {
+                            label: function(context) {
+                                return context.dataset.label + ': ' + formatMoney(context.parsed.y) + ' ' + currency;
+                            }
+                        }
+                    }
                 },
                 scales: {
                     x: { grid: { color: 'rgba(71,85,105,0.2)' }, ticks: { color: '#8c9bb5', font: { family: 'Vazirmatn' } } },
-                    y: { grid: { color: 'rgba(71,85,105,0.2)' }, ticks: { color: '#8c9bb5', font: { family: 'Vazirmatn' } } }
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: 'rgba(71,85,105,0.2)' },
+                        ticks: { color: '#8c9bb5', font: { family: 'Vazirmatn' }, callback: v => formatMoney(v) }
+                    }
                 }
             }
         });
@@ -969,31 +1001,49 @@ function updateAnalysis() {
 
     const pieCanvas = document.getElementById('categoryChart');
     if (pieCanvas) {
+        if (categoryChart) { categoryChart.destroy(); categoryChart = null; }
         const ctx = pieCanvas.getContext('2d');
         const byCat = {};
         for (const t of transactions.filter(t => t.type === 'expense')) {
-            const cat = categories.find(c => c.id === t.categoryId);
-            const key = cat ? cat.name : 'نامشخص';
+            const cat = t.categoryId ? categories.find(c => c.id === t.categoryId) : null;
+            const key = cat ? cat.name : 'بدون دسته';
             byCat[key] = (byCat[key] || 0) + t.amount;
         }
         const entries = Object.entries(byCat).sort((a, b) => b[1] - a[1]).slice(0, 8);
         const colors = ['#7aa2ff','#a78bfa','#34d399','#f5b84b','#fb7185','#60a5fa','#c084fc','#8c9bb5'];
 
-        if (categoryChart) categoryChart.destroy();
-        categoryChart = new Chart(ctx, {
-            type: 'doughnut',
-            data: {
-                labels: entries.map(e => e[0]),
-                datasets: [{ data: entries.map(e => e[1]), backgroundColor: colors, borderColor: '#111a2c', borderWidth: 2 }]
-            },
-            options: {
-                responsive: true, maintainAspectRatio: false,
-                plugins: {
-                    legend: { position: 'bottom', labels: { color: '#e8edf6', font: { family: 'Vazirmatn' } } },
-                    tooltip: { backgroundColor: '#17223a', titleColor: '#f1f5f9', bodyColor: '#94a3b8' }
+        if (entries.length === 0) {
+            ctx.clearRect(0, 0, pieCanvas.width, pieCanvas.height);
+            ctx.fillStyle = '#8c9bb5';
+            ctx.font = '16px Vazirmatn, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('هزینه‌ای برای نمایش وجود ندارد', pieCanvas.width / 2, pieCanvas.height / 2);
+        } else {
+            categoryChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: entries.map(e => e[0]),
+                    datasets: [{ data: entries.map(e => e[1]), backgroundColor: colors, borderColor: '#111a2c', borderWidth: 2 }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'bottom', labels: { color: '#e8edf6', font: { family: 'Vazirmatn' } } },
+                        tooltip: {
+                            backgroundColor: '#17223a',
+                            titleColor: '#f1f5f9',
+                            bodyColor: '#94a3b8',
+                            callbacks: {
+                                label: function(context) {
+                                    return context.label + ': ' + formatMoney(context.parsed) + ' ' + currency;
+                                }
+                            }
+                        }
+                    }
                 }
-            }
-        });
+            });
+        }
     }
 
     const totalIncome = transactions.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
@@ -1168,7 +1218,6 @@ async function addCategory() {
     showNotification('✅ دسته اضافه شد', 'success');
 }
 
-// ✅ حذف واقعی دسته از IndexedDB
 async function deleteCategoryConfirm(id) {
     const cat = categories.find(c => c.id === id);
     if (!cat) return;
