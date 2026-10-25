@@ -1,7 +1,7 @@
 {
-  "name": "JournalMe - ژورنال معاملاتی",
-  "short_name": "JournalMe",
-  "description": "ژورنال معاملاتی با ماشین‌حساب ریسک",
+  "name": "JournalMe Finance",
+  "short_name": "JM Finance",
+  "description": "مدیریت مالی شخصی - درآمد، هزینه، سرمایه‌گذاری",
   "lang": "fa",
   "dir": "rtl",
   "start_url": "./",
@@ -11,8 +11,7 @@
   "background_color": "#0f172a",
   "theme_color": "#0f172a",
   "icons": [
-    { "src": "apple-touch-icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any" },
-    { "src": "icons/favicon-96x96.png", "sizes": "96x96", "type": "image/png" },
+    { "src": "icons/favicon-96x96.png", "sizes": "96x96", "type": "image/png", "purpose": "any" },
     { "src": "icons/favicon.svg", "sizes": "any", "type": "image/svg+xml" }
   ]
 }
