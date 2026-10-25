@@ -2,7 +2,6 @@
 // JournalMe Finance - منطق کامل
 // ============================================================
 
-// ===== توابع تاریخ شمسی =====
 function getPersianDateParts(date) {
     if (!date) return null;
     const d = new Date(date);
@@ -80,7 +79,6 @@ function escapeHTML(v) {
     return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-// ===== دسته‌های پیش‌فرض =====
 const DEFAULT_CATEGORIES = {
     income: [
         { name: 'حقوق', icon: 'fa-briefcase' },
@@ -120,7 +118,6 @@ const ACCOUNT_TYPES = {
     other: { label: 'سایر', icon: 'fa-wallet' }
 };
 
-// ===== IndexedDB =====
 class FinanceDB {
     constructor() {
         this.dbName = 'JournalMeFinance';
@@ -339,7 +336,6 @@ class FinanceDB {
 
 const db = new FinanceDB();
 
-// ===== State =====
 let transactions = [];
 let accounts = [];
 let categories = [];
@@ -351,8 +347,8 @@ let trendChart = null;
 let incomeExpenseChart = null;
 let categoryChart = null;
 let isImportCancelled = false;
+let currentCategoryType = 'expense';
 
-// ===== Utils =====
 function formatCurrency(num) {
     return formatMoney(num) + ' ' + currency;
 }
@@ -369,12 +365,9 @@ function switchSection(sectionId) {
     if (sectionId === 'history') loadTransactions();
     if (sectionId === 'analysis') updateAnalysis();
     if (sectionId === 'accounts') renderAccounts();
-    if (sectionId === 'transaction-form') {
-        // reset در حالت جدید
-    }
+    if (sectionId === 'categories') renderCategories();
 }
 
-// ===== Initialize =====
 async function initialize() {
     try {
         await db.open();
@@ -383,7 +376,6 @@ async function initialize() {
         await loadCategories();
         await loadTransactionsFromDB();
 
-        // اگر حساب و دسته نداریم، پیش‌فرض بساز
         if (accounts.length === 0) await createDefaultAccount();
         if (categories.length === 0) await createDefaultCategories();
 
@@ -426,25 +418,17 @@ async function createDefaultAccount() {
     };
     accounts = [acc];
     await db.saveAccounts(accounts);
-    console.log('✅ حساب پیش‌فرض ساخته شد');
 }
 
 async function createDefaultCategories() {
     const all = [];
     for (const [type, list] of Object.entries(DEFAULT_CATEGORIES)) {
         for (const c of list) {
-            all.push({
-                id: generateId(),
-                name: c.name,
-                type,
-                icon: c.icon,
-                isPreset: true
-            });
+            all.push({ id: generateId(), name: c.name, type, icon: c.icon, isPreset: true });
         }
     }
     categories = all;
     await db.saveCategories(categories);
-    console.log('✅ دسته‌های پیش‌فرض ساخته شد');
 }
 
 async function refreshAllSelects() {
@@ -467,11 +451,11 @@ function refreshAccountSelects() {
 function refreshCategorySelect() {
     const sel = document.getElementById('categoryId');
     if (!sel) return;
-    const filtered = categories.filter(c => c.type === currentType || currentType === 'transfer');
     if (currentType === 'transfer') {
         sel.innerHTML = '<option value="">بدون دسته</option>';
         return;
     }
+    const filtered = categories.filter(c => c.type === currentType);
     sel.innerHTML = '<option value="">انتخاب دسته...</option>' + filtered.map(c => `<option value="${c.id}">${escapeHTML(c.name)}</option>`).join('');
 }
 
@@ -490,7 +474,6 @@ function setDefaultDate() {
     if (dateEl) dateEl.value = localISO;
 }
 
-// ===== نوع تراکنش =====
 function selectType(type) {
     currentType = type;
     document.getElementById('type').value = type;
@@ -502,7 +485,6 @@ function selectType(type) {
     refreshCategorySelect();
 }
 
-// ===== پیوست =====
 function previewAttachment(input) {
     if (!input.files || !input.files[0]) return;
     const reader = new FileReader();
@@ -542,28 +524,18 @@ function compressImage(dataUrl, cb) {
     img.src = dataUrl;
 }
 
-// ===== فرم ثبت =====
 document.getElementById('transactionForm').addEventListener('submit', async function(e) {
     e.preventDefault();
 
     const amountStr = document.getElementById('amount').value.trim();
     const amount = toNumber(amountStr);
-    if (amount <= 0) {
-        showNotification('مبلغ معتبر وارد کنید.', 'error');
-        return;
-    }
+    if (amount <= 0) { showNotification('مبلغ معتبر وارد کنید.', 'error'); return; }
 
     const date = document.getElementById('date').value;
-    if (!date) {
-        showNotification('تاریخ را وارد کنید.', 'error');
-        return;
-    }
+    if (!date) { showNotification('تاریخ را وارد کنید.', 'error'); return; }
 
     const accountId = document.getElementById('accountId').value;
-    if (!accountId) {
-        showNotification('حساب را انتخاب کنید.', 'error');
-        return;
-    }
+    if (!accountId) { showNotification('حساب را انتخاب کنید.', 'error'); return; }
 
     const type = document.getElementById('type').value;
     let categoryId = document.getElementById('categoryId').value || null;
@@ -571,14 +543,8 @@ document.getElementById('transactionForm').addEventListener('submit', async func
 
     if (type === 'transfer') {
         toAccountId = document.getElementById('toAccountId').value;
-        if (!toAccountId) {
-            showNotification('حساب مقصد را انتخاب کنید.', 'error');
-            return;
-        }
-        if (parseInt(toAccountId) === parseInt(accountId)) {
-            showNotification('حساب مبدأ و مقصد نمی‌توانند یکی باشند.', 'error');
-            return;
-        }
+        if (!toAccountId) { showNotification('حساب مقصد را انتخاب کنید.', 'error'); return; }
+        if (parseInt(toAccountId) === parseInt(accountId)) { showNotification('حساب مبدأ و مقصد یکی نباشد.', 'error'); return; }
         categoryId = null;
     }
 
@@ -600,7 +566,6 @@ document.getElementById('transactionForm').addEventListener('submit', async func
         updatedAt: new Date().toISOString()
     };
 
-    // اگر ویرایش است، createdAt قبلی را حفظ کن
     if (editingTransactionId != null) {
         const orig = await db.getTransactionById(editingTransactionId);
         if (orig) {
@@ -634,7 +599,6 @@ document.getElementById('transactionForm').addEventListener('submit', async func
 
         showNotification('✅ تراکنش ثبت شد', 'success');
         await checkStorage();
-
         setTimeout(() => switchSection('dashboard'), 800);
     } catch (err) {
         console.error(err);
@@ -651,7 +615,6 @@ document.getElementById('transactionForm').addEventListener('reset', () => {
     }, 0);
 });
 
-// ===== داشبورد =====
 function updateDashboard() {
     const totalBalance = accounts.reduce((sum, acc) => sum + getAccountBalance(acc.id), 0);
     document.getElementById('totalBalance').textContent = formatCurrency(totalBalance);
@@ -704,8 +667,7 @@ function updateTrendChart() {
     const months = [];
     for (let i = 5; i >= 0; i--) {
         const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-        const pd = getPersianDateParts(d);
-        months.push(pd);
+        months.push(getPersianDateParts(d));
     }
 
     const incomeData = [];
@@ -734,8 +696,7 @@ function updateTrendChart() {
             ]
         },
         options: {
-            responsive: true,
-            maintainAspectRatio: false,
+            responsive: true, maintainAspectRatio: false,
             plugins: {
                 legend: { labels: { color: '#e8edf6', font: { family: 'Vazirmatn' } } },
                 tooltip: { backgroundColor: '#17223a', titleColor: '#f1f5f9', bodyColor: '#94a3b8', borderColor: '#243049', borderWidth: 1 }
@@ -782,7 +743,6 @@ function updateAccountsCount() {
     if (el) el.textContent = active + ' حساب فعال';
 }
 
-// ===== تاریخچه =====
 function loadTransactions() {
     const tbody = document.getElementById('transactionsTableBody');
     const noMsg = document.getElementById('noTransactionsMessage');
@@ -846,7 +806,6 @@ function applyHistoryFilters() {
     });
 }
 
-// ===== جزئیات =====
 function showDetails(id) {
     const t = transactions.find(x => x.id === id);
     if (!t) return;
@@ -904,7 +863,6 @@ function closeImageModal() {
     document.body.style.overflow = 'auto';
 }
 
-// ===== ویرایش =====
 async function editTransaction(id) {
     const t = await db.getTransactionById(id);
     if (!t) return;
@@ -944,7 +902,6 @@ async function deleteTransaction(id) {
     }
 }
 
-// ===== تحلیل =====
 function updateAnalysis() {
     const range = parseInt(document.getElementById('analysisRange')?.value || 6);
     const now = new Date();
@@ -968,7 +925,6 @@ function updateAnalysis() {
     const monthNames = ['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند'];
     const labels = months.map(m => monthNames[m.month - 1]);
 
-    // نمودار خطی
     const lineCanvas = document.getElementById('incomeExpenseChart');
     if (lineCanvas) {
         const ctx = lineCanvas.getContext('2d');
@@ -983,8 +939,7 @@ function updateAnalysis() {
                 ]
             },
             options: {
-                responsive: true,
-                maintainAspectRatio: false,
+                responsive: true, maintainAspectRatio: false,
                 plugins: {
                     legend: { labels: { color: '#e8edf6', font: { family: 'Vazirmatn' } } },
                     tooltip: { backgroundColor: '#17223a', titleColor: '#f1f5f9', bodyColor: '#94a3b8' }
@@ -997,7 +952,6 @@ function updateAnalysis() {
         });
     }
 
-    // نمودار دایره‌ای
     const pieCanvas = document.getElementById('categoryChart');
     if (pieCanvas) {
         const ctx = pieCanvas.getContext('2d');
@@ -1018,8 +972,7 @@ function updateAnalysis() {
                 datasets: [{ data: entries.map(e => e[1]), backgroundColor: colors, borderColor: '#111a2c', borderWidth: 2 }]
             },
             options: {
-                responsive: true,
-                maintainAspectRatio: false,
+                responsive: true, maintainAspectRatio: false,
                 plugins: {
                     legend: { position: 'bottom', labels: { color: '#e8edf6', font: { family: 'Vazirmatn' } } },
                     tooltip: { backgroundColor: '#17223a', titleColor: '#f1f5f9', bodyColor: '#94a3b8' }
@@ -1028,7 +981,6 @@ function updateAnalysis() {
         });
     }
 
-    // آمار کلی
     const totalIncome = transactions.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
     const totalExpense = transactions.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
     const totalInvestment = transactions.filter(t => t.type === 'investment').reduce((s, t) => s + t.amount, 0);
@@ -1038,7 +990,6 @@ function updateAnalysis() {
     document.getElementById('totalInvestmentAll').textContent = formatMoney(totalInvestment);
     document.getElementById('totalTransactionsCount').textContent = transactions.length;
 
-    // میانگین هزینه روزانه
     if (transactions.length > 0) {
         const dates = transactions.map(t => new Date(t.date).getTime()).filter(d => !isNaN(d));
         if (dates.length > 0) {
@@ -1056,7 +1007,6 @@ function updateAnalysis() {
     document.getElementById('maxExpense').textContent = formatMoney(maxExp);
 }
 
-// ===== حساب‌ها =====
 function renderAccounts() {
     const el = document.getElementById('accountsList');
     if (!el) return;
@@ -1117,15 +1067,9 @@ async function addAccount() {
 }
 
 async function deleteAccountConfirm(id) {
-    if (accounts.length <= 1) {
-        showNotification('حداقل یک حساب باید وجود داشته باشد.', 'error');
-        return;
-    }
+    if (accounts.length <= 1) { showNotification('حداقل یک حساب باید باشد.', 'error'); return; }
     const hasTx = transactions.some(t => t.accountId === id || t.toAccountId === id);
-    if (hasTx) {
-        showNotification('این حساب تراکنش دارد و قابل حذف نیست.', 'error');
-        return;
-    }
+    if (hasTx) { showNotification('این حساب تراکنش دارد و قابل حذف نیست.', 'error'); return; }
     if (!confirm('این حساب حذف شود؟')) return;
 
     await db.deleteAccount(id);
@@ -1137,7 +1081,99 @@ async function deleteAccountConfirm(id) {
     showNotification('حساب حذف شد.', 'warning');
 }
 
-// ===== بکاپ =====
+// ===== مدیریت دسته‌ها =====
+function selectCategoryType(type) {
+    currentCategoryType = type;
+    document.querySelectorAll('[data-cat-type]').forEach(b => {
+        b.classList.toggle('active', b.dataset.catType === type);
+    });
+    renderCategories();
+}
+
+function renderCategories() {
+    const el = document.getElementById('categoriesList');
+    if (!el) return;
+
+    const filtered = categories.filter(c => c.type === currentCategoryType);
+
+    if (filtered.length === 0) {
+        el.innerHTML = '<p style="color:var(--muted);text-align:center;padding:30px;">دسته‌ای در این بخش وجود ندارد.</p>';
+        return;
+    }
+
+    const typeLabels = { income: 'درآمد', expense: 'هزینه', investment: 'سرمایه‌گذاری' };
+
+    el.innerHTML = filtered.map(cat => {
+        const usedCount = transactions.filter(t => t.categoryId === cat.id).length;
+        return `<div class="account-card">
+            <div class="account-card-info">
+                <div class="account-card-icon" data-type="${cat.type === 'income' ? 'cash' : (cat.type === 'investment' ? 'crypto' : 'bank')}">
+                    <i class="fas ${escapeHTML(cat.icon || 'fa-tag')}"></i>
+                </div>
+                <div>
+                    <div class="account-card-name">${escapeHTML(cat.name)}</div>
+                    <div class="account-card-type">${typeLabels[cat.type]} ${usedCount > 0 ? `· ${usedCount} استفاده` : ''}</div>
+                </div>
+            </div>
+            <div class="account-card-actions">
+                <button class="btn-icon delete" onclick="deleteCategoryConfirm(${cat.id})" title="حذف"><i class="fas fa-trash"></i></button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+async function addCategory() {
+    const name = document.getElementById('newCategoryName').value.trim();
+    let icon = (document.getElementById('newCategoryIcon').value.trim() || 'fa-tag');
+    if (!icon.startsWith('fa-')) icon = 'fa-' + icon;
+
+    if (!name) { showNotification('نام دسته را وارد کنید.', 'error'); return; }
+    if (categories.some(c => c.type === currentCategoryType && c.name.toLowerCase() === name.toLowerCase())) {
+        showNotification('این دسته در این بخش وجود دارد.', 'error');
+        return;
+    }
+
+    const cat = {
+        id: generateId(),
+        name,
+        type: currentCategoryType,
+        icon,
+        isPreset: false
+    };
+
+    categories.push(cat);
+    await db.saveCategories(categories);
+
+    document.getElementById('newCategoryName').value = '';
+    document.getElementById('newCategoryIcon').value = 'fa-tag';
+
+    renderCategories();
+    refreshCategorySelect();
+    refreshHistoryFilters();
+    showNotification('✅ دسته اضافه شد', 'success');
+}
+
+async function deleteCategoryConfirm(id) {
+    const cat = categories.find(c => c.id === id);
+    if (!cat) return;
+
+    const usedCount = transactions.filter(t => t.categoryId === id).length;
+    if (usedCount > 0) {
+        showNotification(`این دسته در ${usedCount} تراکنش استفاده شده و قابل حذف نیست.`, 'error');
+        return;
+    }
+
+    if (!confirm(`دسته «${cat.name}» حذف شود؟`)) return;
+
+    categories = categories.filter(c => c.id !== id);
+    await db.saveCategories(categories);
+
+    renderCategories();
+    refreshCategorySelect();
+    refreshHistoryFilters();
+    showNotification('دسته حذف شد.', 'warning');
+}
+
 async function exportData() {
     try {
         showProgress('آماده‌سازی...', 10);
@@ -1270,7 +1306,6 @@ async function importData() {
                 for (const t of b) {
                     if (!t.uid) t.uid = `tx_${t.id}`;
                     if (t.attachment) {
-                        const fn = `receipt_${t.id}.jpg`;
                         if (imagesMap.has(t.attachmentName)) {
                             t.attachment = imagesMap.get(t.attachmentName);
                         } else {
@@ -1303,7 +1338,7 @@ async function importData() {
         fileInput.value = '';
         setTimeout(hideProgress, 1500);
         if (failedCount > 0) {
-            showNotification(`⚠️ بارگذاری شد ولی ${failedCount} تراکنش ناموفق بود.`, 'warning');
+            showNotification(`⚠️ ${failedCount} تراکنش ناموفق.`, 'warning');
         } else {
             showNotification(`✅ ${transactions.length} تراکنش بازیابی شد`, 'success');
         }
@@ -1345,7 +1380,6 @@ async function checkStorage() {
     } catch (e) {}
 }
 
-// ===== Notification =====
 function showNotification(msg, type = 'info') {
     const ex = document.querySelector('.notification'); if (ex) ex.remove();
     const n = document.createElement('div');
@@ -1363,7 +1397,6 @@ function showNotification(msg, type = 'info') {
     }, 3000);
 }
 
-// ===== Event Listeners =====
 document.addEventListener('DOMContentLoaded', () => {
     setDefaultDate();
     initialize();
