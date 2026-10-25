@@ -243,10 +243,6 @@
                             </select>
                         </div>
                         <div class="growth-chart-container">
-                            <h3 class="growth-chart-title"><i class="fas fa-chart-line"></i> درآمد vs هزینه</h3>
-                            <canvas id="incomeExpenseChart"></canvas>
-                        </div>
-                        <div class="growth-chart-container">
                             <h3 class="growth-chart-title"><i class="fas fa-chart-pie"></i> سهم دسته‌ها</h3>
                             <canvas id="categoryChart"></canvas>
                         </div>
@@ -326,7 +322,7 @@
         </div>
     </div>
 
-    <script src="script.js?v=2"></script>
+    <script src="script.js?v=3"></script>
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => navigator.serviceWorker.register('sw.js?v=2').catch(() => {}));
