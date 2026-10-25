@@ -1,5 +1,5 @@
 // ============================================================
-// JournalMe Finance - منطق کامل
+// JournalMe Finance - منطق کامل (اصلاح‌شده)
 // ============================================================
 
 function getPersianDateParts(date) {
@@ -276,6 +276,21 @@ class FinanceDB {
             const r = t.objectStore('categories').getAll();
             r.onsuccess = () => resolve(r.result || []);
             r.onerror = () => reject(r.error);
+        });
+    }
+
+    // ✅ حذف واقعی دسته از IndexedDB
+    deleteCategory(id) {
+        this.checkReady();
+        return new Promise((resolve, reject) => {
+            let t;
+            try {
+                t = this.db.transaction(['categories'], 'readwrite');
+                t.objectStore('categories').delete(parseInt(id));
+            } catch (e) { return reject(e); }
+            t.oncomplete = () => resolve();
+            t.onerror = () => reject(t.error);
+            t.onabort = () => reject(t.error || new Error('aborted'));
         });
     }
 
@@ -1153,6 +1168,7 @@ async function addCategory() {
     showNotification('✅ دسته اضافه شد', 'success');
 }
 
+// ✅ حذف واقعی دسته از IndexedDB
 async function deleteCategoryConfirm(id) {
     const cat = categories.find(c => c.id === id);
     if (!cat) return;
@@ -1165,13 +1181,17 @@ async function deleteCategoryConfirm(id) {
 
     if (!confirm(`دسته «${cat.name}» حذف شود؟`)) return;
 
-    categories = categories.filter(c => c.id !== id);
-    await db.saveCategories(categories);
-
-    renderCategories();
-    refreshCategorySelect();
-    refreshHistoryFilters();
-    showNotification('دسته حذف شد.', 'warning');
+    try {
+        await db.deleteCategory(id);
+        categories = categories.filter(c => c.id !== id);
+        renderCategories();
+        refreshCategorySelect();
+        refreshHistoryFilters();
+        showNotification('دسته حذف شد.', 'warning');
+    } catch (e) {
+        console.error('خطا در حذف دسته:', e);
+        showNotification('خطا در حذف دسته: ' + e.message, 'error');
+    }
 }
 
 async function exportData() {
