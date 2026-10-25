@@ -1,8 +1,7 @@
-const VERSION = 'journalme-v10';
+const VERSION = 'jmfinance-v1';
 const CORE = [
-  './', 'index.html', 'style.css', 'script.js', 'fees.js', 'manifest.json',
-  'calculator/', 'calculator/index.html',
-  'apple-touch-icon.png', 'icons/favicon-96x96.png'
+  './', 'index.html', 'style.css', 'script.js', 'manifest.json',
+  'icons/favicon.svg', 'icons/favicon-96x96.png'
 ];
 const CDN_HOSTS = ['cdnjs.cloudflare.com', 'cdn.jsdelivr.net'];
 
